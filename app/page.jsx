@@ -1,12 +1,13 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { supabase } from '@/lib/supabase';
 import toast from 'react-hot-toast';
 import confetti from 'canvas-confetti';
 import {
   Clock, CheckCircle2, XCircle, AlertCircle, Plus, Search,
-  Download, RefreshCw, UserCheck, Send, MessageSquare, Shield, User, Trash2, Calendar
+  Download, RefreshCw, UserCheck, Send, MessageSquare, Shield, User,
+  Pencil, Trash2, X
 } from 'lucide-react';
 
 const TIPOS_SOLICITACAO = [
@@ -17,16 +18,43 @@ const TIPOS_SOLICITACAO = [
   'Retirar taxa de boleto'
 ];
 
+// Remove acentos e ignora maiúsculas/minúsculas (ex.: "análise" == "analise")
+const normalizar = (v) =>
+  String(v ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+
+// Converte data ISO/Date para "AAAA-MM-DD" no fuso local (compatível com <input type="date">)
+const paraDataLocal = (valor) => {
+  if (!valor) return '';
+  const d = new Date(valor);
+  if (isNaN(d)) return '';
+  const mes = String(d.getMonth() + 1).padStart(2, '0');
+  const dia = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${mes}-${dia}`;
+};
+
+const formVazio = () => ({
+  cod_liberacao: '',
+  rca: '',
+  tipo_solicitacao: TIPOS_SOLICITACAO[0],
+  observacoes: ''
+});
+
 export default function SolicitacoesApp() {
   const [solicitacoes, setSolicitacoes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [perfil, setPerfil] = useState('SOLICITANTE'); // 'SOLICITANTE' ou 'APROVADOR'
   const [filtroStatus, setFiltroStatus] = useState('TODOS');
   const [busca, setBusca] = useState('');
-  const [dataInicio, setDataInicio] = useState('');
-  const [dataFim, setDataFim] = useState('');
   const [modalAberto, setModalAberto] = useState(false);
   const [modalAprovacao, setModalAprovacao] = useState(null);
+  const [dataInicio, setDataInicio] = useState('');
+  const [dataFim, setDataFim] = useState('');
+  const [editandoId, setEditandoId] = useState(null);
+  const [modalExcluir, setModalExcluir] = useState(null);
+  const [excluindo, setExcluindo] = useState(false);
 
   const [form, setForm] = useState({
     cod_liberacao: '',
@@ -99,7 +127,6 @@ export default function SolicitacoesApp() {
               prev.map((item) => (item.id === payload.new.id ? payload.new : item))
             );
           } else if (payload.eventType === 'DELETE') {
-            toast('Uma solicitação foi excluída.', { icon: '🗑️', duration: 3000 });
             setSolicitacoes((prev) => prev.filter((item) => item.id !== payload.old.id));
           }
         }
@@ -111,19 +138,76 @@ export default function SolicitacoesApp() {
     };
   }, []);
 
-  // Criar Solicitação
+  // Abrir modal para uma nova solicitação
+  const abrirNova = () => {
+    setEditandoId(null);
+    setForm(formVazio());
+    setModalAberto(true);
+  };
+
+  // Abrir modal para editar uma solicitação existente
+  const abrirEdicao = (item) => {
+    setEditandoId(item.id);
+    setForm({
+      cod_liberacao: item.cod_liberacao || '',
+      rca: item.rca || '',
+      tipo_solicitacao: item.tipo_solicitacao || TIPOS_SOLICITACAO[0],
+      observacoes: item.observacoes || ''
+    });
+    setModalAberto(true);
+  };
+
+  const fecharModalForm = () => {
+    setModalAberto(false);
+    setEditandoId(null);
+    setForm(formVazio());
+  };
+
+  // Aprovador altera qualquer solicitação; solicitante só enquanto estiver pendente
+  const podeAlterar = (item) => perfil === 'APROVADOR' || item.status === 'PENDENTE';
+
+  // Criar ou salvar edição
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!form.cod_liberacao || !form.rca) {
+    const cod = form.cod_liberacao.trim();
+    const rca = form.rca.trim();
+    if (!cod || !rca) {
       toast.error('Preencha os campos obrigatórios!');
       return;
     }
 
+    // --- Edição ---
+    if (editandoId) {
+      const toastId = toast.loading('Salvando alterações...');
+      const { data, error } = await supabase
+        .from('solicitacoes')
+        .update({
+          cod_liberacao: cod,
+          rca,
+          tipo_solicitacao: form.tipo_solicitacao,
+          observacoes: form.observacoes
+        })
+        .eq('id', editandoId)
+        .select();
+
+      if (error) {
+        toast.error('Erro ao salvar: ' + error.message, { id: toastId });
+      } else if (!data || data.length === 0) {
+        toast.error('Não foi possível salvar. Verifique a permissão de UPDATE (RLS) da tabela.', { id: toastId });
+      } else {
+        toast.success('Solicitação atualizada!', { id: toastId });
+        setSolicitacoes((prev) => prev.map((item) => (item.id === data[0].id ? data[0] : item)));
+        fecharModalForm();
+      }
+      return;
+    }
+
+    // --- Criação ---
     const toastId = toast.loading('Enviando solicitação...');
-    const { data, error } = await supabase.from('solicitacoes').insert([
+    const { error } = await supabase.from('solicitacoes').insert([
       {
-        cod_liberacao: form.cod_liberacao,
-        rca: form.rca,
+        cod_liberacao: cod,
+        rca,
         tipo_solicitacao: form.tipo_solicitacao,
         observacoes: form.observacoes,
         status: 'PENDENTE',
@@ -135,29 +219,31 @@ export default function SolicitacoesApp() {
       toast.error('Erro ao enviar: ' + error.message, { id: toastId });
     } else {
       toast.success('Solicitação enviada com sucesso!', { id: toastId });
-      setModalAberto(false);
-      setForm({
-        cod_liberacao: '',
-        rca: '',
-        tipo_solicitacao: TIPOS_SOLICITACAO[0],
-        observacoes: ''
-      });
+      fecharModalForm();
       fetchSolicitacoes();
     }
   };
 
-  // Excluir Solicitação
-  const handleExcluir = async (id) => {
-    if (confirm('Tem certeza que deseja excluir esta solicitação permanentemente?')) {
-      const toastId = toast.loading('Excluindo solicitação...');
-      const { error } = await supabase.from('solicitacoes').delete().eq('id', id);
+  // Excluir solicitação
+  const handleExcluir = async () => {
+    if (!modalExcluir) return;
+    setExcluindo(true);
+    const toastId = toast.loading('Excluindo solicitação...');
+    const { data, error } = await supabase
+      .from('solicitacoes')
+      .delete()
+      .eq('id', modalExcluir.id)
+      .select();
+    setExcluindo(false);
 
-      if (error) {
-        toast.error('Erro ao excluir: ' + error.message, { id: toastId });
-      } else {
-        toast.success('Solicitação excluída com sucesso!', { id: toastId });
-        setSolicitacoes((prev) => prev.filter((item) => item.id !== id));
-      }
+    if (error) {
+      toast.error('Erro ao excluir: ' + error.message, { id: toastId });
+    } else if (!data || data.length === 0) {
+      toast.error('Não foi possível excluir. Verifique a permissão de DELETE (RLS) da tabela.', { id: toastId });
+    } else {
+      setSolicitacoes((prev) => prev.filter((item) => item.id !== modalExcluir.id));
+      toast.success('Solicitação excluída.', { id: toastId });
+      setModalExcluir(null);
     }
   };
 
@@ -239,21 +325,54 @@ export default function SolicitacoesApp() {
     document.body.removeChild(link);
   };
 
-  // Filtros dinâmicos e por data
-  const solicitacoesFiltradas = solicitacoes.filter(item => {
-    const matchStatus = filtroStatus === 'TODOS' || item.status === filtroStatus;
-    const matchSearch =
-      item.cod_liberacao?.toLowerCase().includes(busca.toLowerCase()) ||
-      item.rca?.toLowerCase().includes(busca.toLowerCase()) ||
-      item.tipo_solicitacao?.toLowerCase().includes(busca.toLowerCase()) ||
-      item.observacoes?.toLowerCase().includes(busca.toLowerCase());
+  // Filtros: status + período (data enviada) + busca por vários termos, sem acento
+  const solicitacoesFiltradas = useMemo(() => {
+    const termos = normalizar(busca).split(/\s+/).filter(Boolean);
 
-    const dataCriacao = item.data_enviada ? item.data_enviada.split('T')[0] : '';
-    const matchDataInicio = !dataInicio || dataCriacao >= dataInicio;
-    const matchDataFim = !dataFim || dataCriacao <= dataFim;
+    return solicitacoes.filter((item) => {
+      if (filtroStatus !== 'TODOS' && item.status !== filtroStatus) return false;
 
-    return matchStatus && matchSearch && matchDataInicio && matchDataFim;
-  });
+      const dia = paraDataLocal(item.data_enviada);
+      if (dataInicio && (!dia || dia < dataInicio)) return false;
+      if (dataFim && (!dia || dia > dataFim)) return false;
+
+      if (termos.length === 0) return true;
+
+      const statusTexto =
+        item.status === 'SIM' ? 'sim aprovado' : item.status === 'NAO' ? 'nao recusado' : 'pendente em analise';
+      const alvo = normalizar(
+        [
+          item.cod_liberacao,
+          item.rca,
+          item.tipo_solicitacao,
+          item.observacoes,
+          item.motivo_recusa,
+          statusTexto,
+          formatDateTime(item.data_enviada)
+        ].join(' ')
+      );
+      // Todos os termos digitados precisam aparecer (em qualquer campo)
+      return termos.every((termo) => alvo.includes(termo));
+    });
+  }, [solicitacoes, filtroStatus, busca, dataInicio, dataFim]);
+
+  const temFiltroAtivo = Boolean(busca || dataInicio || dataFim || filtroStatus !== 'TODOS');
+
+  const limparFiltros = () => {
+    setBusca('');
+    setDataInicio('');
+    setDataFim('');
+    setFiltroStatus('TODOS');
+  };
+
+  // Atalhos de período: 1 = hoje, 7 = últimos 7 dias, etc.
+  const aplicarPeriodo = (dias) => {
+    const hoje = new Date();
+    const inicio = new Date();
+    inicio.setDate(hoje.getDate() - (dias - 1));
+    setDataInicio(paraDataLocal(inicio));
+    setDataFim(paraDataLocal(hoje));
+  };
 
   return (
     <div className="min-h-screen bg-slate-100 p-3 sm:p-6">
@@ -295,7 +414,7 @@ export default function SolicitacoesApp() {
             {/* Botão de Nova Solicitação (Apenas Solicitante) */}
             {perfil === 'SOLICITANTE' && (
               <button
-                onClick={() => setModalAberto(true)}
+                onClick={abrirNova}
                 className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-sm font-semibold flex items-center gap-2 transition shadow-sm"
               >
                 <Plus className="w-4 h-4" /> Nova Solicitação
@@ -346,199 +465,157 @@ export default function SolicitacoesApp() {
           </div>
         </div>
 
-        {/* BARRA DE FILTROS, BUSCA E DATAS */}
+        {/* BARRA DE FILTROS E BUSCA */}
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm space-y-3">
-          <div className="flex flex-col md:flex-row items-center justify-between gap-3">
-            <div className="relative w-full md:w-80">
+          <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
+            <div className="relative w-full md:w-96">
               <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
                 type="text"
-                placeholder="Buscar Cód, RCA, Tipo ou Obs..."
+                placeholder="Buscar por cód., RCA, tipo, observação, motivo..."
                 value={busca}
                 onChange={(e) => setBusca(e.target.value)}
-                className="w-full pl-9 pr-4 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                className="w-full pl-9 pr-9 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
               />
-            </div>
-
-            {/* Filtros de Data */}
-            <div className="flex items-center gap-2 w-full md:w-auto">
-              <div className="flex items-center gap-1 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1">
-                <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                <span className="text-xs text-slate-500">De:</span>
-                <input
-                  type="date"
-                  value={dataInicio}
-                  onChange={(e) => setDataInicio(e.target.value)}
-                  className="bg-transparent text-xs text-slate-700 focus:outline-none"
-                />
-              </div>
-
-              <div className="flex items-center gap-1 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1">
-                <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                <span className="text-xs text-slate-500">Até:</span>
-                <input
-                  type="date"
-                  value={dataFim}
-                  onChange={(e) => setDataFim(e.target.value)}
-                  className="bg-transparent text-xs text-slate-700 focus:outline-none"
-                />
-              </div>
-
-              {(dataInicio || dataFim || busca) && (
+              {busca && (
                 <button
-                  onClick={() => { setBusca(''); setDataInicio(''); setDataFim(''); }}
-                  className="text-xs text-indigo-600 hover:underline font-semibold whitespace-nowrap px-2"
+                  type="button"
+                  onClick={() => setBusca('')}
+                  aria-label="Limpar busca"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-700"
                 >
-                  Limpar
+                  <X className="w-4 h-4" />
                 </button>
               )}
             </div>
+
+            <div className="flex items-center gap-2 w-full md:w-auto overflow-x-auto">
+              {['TODOS', 'PENDENTE', 'SIM', 'NAO'].map((st) => (
+                <button
+                  key={st}
+                  onClick={() => setFiltroStatus(st)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition whitespace-nowrap ${
+                    filtroStatus === st
+                      ? 'bg-slate-800 text-white'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  {st === 'TODOS' ? 'Todos' : st === 'PENDENTE' ? 'Em Análise' : st === 'SIM' ? 'Aprovados (SIM)' : 'Recusados (NÃO)'}
+                </button>
+              ))}
+            </div>
           </div>
 
-          <div className="flex items-center gap-2 w-full overflow-x-auto pt-2 border-t border-slate-100">
-            {['TODOS', 'PENDENTE', 'SIM', 'NAO'].map((st) => (
+          <div className="flex flex-wrap items-end gap-3 pt-3 border-t border-slate-100">
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Enviada de</label>
+              <input
+                type="date"
+                value={dataInicio}
+                max={dataFim || undefined}
+                onChange={(e) => setDataInicio(e.target.value)}
+                className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">até</label>
+              <input
+                type="date"
+                value={dataFim}
+                min={dataInicio || undefined}
+                onChange={(e) => setDataFim(e.target.value)}
+                className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
+
+            <div className="flex items-center gap-2">
+              {[
+                { label: 'Hoje', dias: 1 },
+                { label: '7 dias', dias: 7 },
+                { label: '30 dias', dias: 30 }
+              ].map((p) => (
+                <button
+                  key={p.dias}
+                  onClick={() => aplicarPeriodo(p.dias)}
+                  className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 text-slate-600 hover:bg-slate-200 transition whitespace-nowrap"
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+
+            {temFiltroAtivo && (
               <button
-                key={st}
-                onClick={() => setFiltroStatus(st)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition whitespace-nowrap ${
-                  filtroStatus === st
-                    ? 'bg-slate-800 text-white'
-                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                }`}
+                onClick={limparFiltros}
+                className="px-3 py-1.5 rounded-lg text-xs font-semibold text-indigo-600 hover:bg-indigo-50 transition whitespace-nowrap"
               >
-                {st === 'TODOS' ? 'Todos' : st === 'PENDENTE' ? 'Em Análise' : st === 'SIM' ? 'Aprovados (SIM)' : 'Recusados (NÃO)'}
+                Limpar filtros
               </button>
-            ))}
+            )}
+
+            <span className="ml-auto text-xs text-slate-500 whitespace-nowrap">
+              {solicitacoesFiltradas.length} de {solicitacoes.length} solicitações
+            </span>
           </div>
         </div>
 
-        {/* LISTAGEM: CARDS NO CELULAR / TABELA NO COMPUTADOR */}
+        {/* TABELA / LISTA DE SOLICITAÇÕES */}
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
           {loading ? (
             <div className="p-8 text-center text-slate-500">Carregando solicitações...</div>
           ) : solicitacoesFiltradas.length === 0 ? (
             <div className="p-8 text-center text-slate-500">Nenhuma solicitação encontrada.</div>
           ) : (
-            <>
-              {/* VISÃO MOBILE: CARDS (Aparece apenas em telas pequenas) */}
-              <div className="block md:hidden divide-y divide-slate-200">
-                {solicitacoesFiltradas.map((item) => (
-                  <div key={item.id} className="p-4 space-y-3">
-                    <div className="flex justify-between items-start">
-                      <div>
-                        <span className="text-xs font-bold text-slate-400">Cód: #{item.cod_liberacao}</span>
-                        <h3 className="font-bold text-base text-slate-800">{item.tipo_solicitacao}</h3>
-                      </div>
-                      <span
-                        className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold ${
-                          item.status === 'SIM'
-                            ? 'bg-emerald-100 text-emerald-800'
-                            : item.status === 'NAO'
-                            ? 'bg-rose-100 text-rose-800'
-                            : 'bg-amber-100 text-amber-800'
-                        }`}
-                      >
-                        {item.status === 'SIM' ? 'SIM' : item.status === 'NAO' ? 'NÃO' : 'EM ANÁLISE'}
-                      </span>
-                    </div>
-
-                    <div className="text-xs space-y-1 text-slate-600">
-                      <p><strong>RCA:</strong> {item.rca}</p>
-                      <p><strong>Enviada:</strong> {formatDateTime(item.data_enviada)}</p>
-                      {item.data_finalizada && <p><strong>Finalizada:</strong> {formatDateTime(item.data_finalizada)}</p>}
-                      {item.data_enviada && item.data_finalizada && (
-                        <p><strong>Tempo:</strong> <span className="font-mono">{calcularTempoConclusao(item.data_enviada, item.data_finalizada)}</span></p>
-                      )}
-                      {item.observacoes && (
-                        <p className="bg-slate-50 p-2 rounded text-slate-700 mt-1">
-                          <strong>Obs:</strong> {item.observacoes}
-                        </p>
-                      )}
-                      {item.motivo_recusa && (
-                        <p className="bg-rose-50 text-rose-700 p-2 rounded mt-1">
-                          <strong>Motivo Recusa:</strong> {item.motivo_recusa}
-                        </p>
-                      )}
-                    </div>
-
-                    <div className="pt-2 flex justify-between items-center border-t border-slate-100">
-                      <button
-                        onClick={() => handleExcluir(item.id)}
-                        className="text-xs font-semibold text-rose-600 bg-rose-50 hover:bg-rose-100 px-3 py-1.5 rounded-lg flex items-center gap-1 transition"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" /> Excluir
-                      </button>
-
-                      {perfil === 'APROVADOR' && (
-                        <button
-                          onClick={() => setModalAprovacao(item)}
-                          className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition shadow-sm"
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs sm:text-sm">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold uppercase tracking-wider">
+                    <th className="p-3">Cód. P / Liberação</th>
+                    <th className="p-3">RCA</th>
+                    <th className="p-3">Tipo de Solicitação</th>
+                    <th className="p-3 text-center">Status (SIM/NÃO)</th>
+                    <th className="p-3">Observações</th>
+                    <th className="p-3">Motivo Recusa</th>
+                    <th className="p-3">Enviada em</th>
+                    <th className="p-3">Finalizada em</th>
+                    <th className="p-3 text-center">Tempo Conclusão</th>
+                    <th className="p-3 text-center">Ações</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200">
+                  {solicitacoesFiltradas.map((item) => (
+                    <tr key={item.id} className="hover:bg-slate-50/80 transition">
+                      <td className="p-3 font-semibold text-slate-800">{item.cod_liberacao}</td>
+                      <td className="p-3 font-medium text-slate-600">{item.rca}</td>
+                      <td className="p-3">{item.tipo_solicitacao}</td>
+                      <td className="p-3 text-center">
+                        <span
+                          className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold ${
+                            item.status === 'SIM'
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : item.status === 'NAO'
+                              ? 'bg-rose-100 text-rose-800'
+                              : 'bg-amber-100 text-amber-800'
+                          }`}
                         >
-                          {item.status === 'PENDENTE' ? 'Avaliar' : 'Revisar'}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {/* VISÃO DESKTOP: TABELA (Aparece em telas médias/grandes) */}
-              <div className="hidden md:block overflow-x-auto">
-                <table className="w-full text-left border-collapse text-xs sm:text-sm">
-                  <thead>
-                    <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold uppercase tracking-wider">
-                      <th className="p-3">Cód. P / Liberação</th>
-                      <th className="p-3">RCA</th>
-                      <th className="p-3">Tipo de Solicitação</th>
-                      <th className="p-3 text-center">Status (SIM/NÃO)</th>
-                      <th className="p-3">Observações</th>
-                      <th className="p-3">Motivo Recusa</th>
-                      <th className="p-3">Enviada em</th>
-                      <th className="p-3">Finalizada em</th>
-                      <th className="p-3 text-center">Tempo Conclusão</th>
-                      <th className="p-3 text-center">Ações</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-200">
-                    {solicitacoesFiltradas.map((item) => (
-                      <tr key={item.id} className="hover:bg-slate-50/80 transition">
-                        <td className="p-3 font-semibold text-slate-800">{item.cod_liberacao}</td>
-                        <td className="p-3 font-medium text-slate-600">{item.rca}</td>
-                        <td className="p-3">{item.tipo_solicitacao}</td>
-                        <td className="p-3 text-center">
-                          <span
-                            className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold ${
-                              item.status === 'SIM'
-                                ? 'bg-emerald-100 text-emerald-800'
-                                : item.status === 'NAO'
-                                ? 'bg-rose-100 text-rose-800'
-                                : 'bg-amber-100 text-amber-800'
-                            }`}
-                          >
-                            {item.status === 'SIM' ? 'SIM' : item.status === 'NAO' ? 'NÃO' : 'EM ANÁLISE'}
-                          </span>
-                        </td>
-                        <td className="p-3 max-w-xs truncate text-slate-600" title={item.observacoes}>
-                          {item.observacoes || '-'}
-                        </td>
-                        <td className="p-3 max-w-xs truncate text-rose-600 font-medium" title={item.motivo_recusa}>
-                          {item.motivo_recusa || '-'}
-                        </td>
-                        <td className="p-3 text-slate-500 whitespace-nowrap">{formatDateTime(item.data_enviada)}</td>
-                        <td className="p-3 text-slate-500 whitespace-nowrap">{formatDateTime(item.data_finalizada)}</td>
-                        <td className="p-3 text-center font-mono text-xs font-semibold text-slate-700">
-                          {calcularTempoConclusao(item.data_enviada, item.data_finalizada)}
-                        </td>
-                        <td className="p-3 text-center flex items-center justify-center gap-2">
-                          <button
-                            onClick={() => handleExcluir(item.id)}
-                            className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition"
-                            title="Excluir solicitação"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                          {perfil === 'APROVADOR' && (
-                            item.status === 'PENDENTE' ? (
+                          {item.status === 'SIM' ? 'SIM' : item.status === 'NAO' ? 'NÃO' : 'EM ANÁLISE'}
+                        </span>
+                      </td>
+                      <td className="p-3 max-w-xs truncate text-slate-600" title={item.observacoes}>
+                        {item.observacoes || '-'}
+                      </td>
+                      <td className="p-3 max-w-xs truncate text-rose-600 font-medium" title={item.motivo_recusa}>
+                        {item.motivo_recusa || '-'}
+                      </td>
+                      <td className="p-3 text-slate-500 whitespace-nowrap">{formatDateTime(item.data_enviada)}</td>
+                      <td className="p-3 text-slate-500 whitespace-nowrap">{formatDateTime(item.data_finalizada)}</td>
+                      <td className="p-3 text-center font-mono text-xs font-semibold text-slate-700">
+                        {calcularTempoConclusao(item.data_enviada, item.data_finalizada)}
+                      </td>
+                      <td className="p-3">
+                        <div className="flex items-center justify-center gap-1.5 whitespace-nowrap">
+                          {perfil === 'APROVADOR' &&
+                            (item.status === 'PENDENTE' ? (
                               <button
                                 onClick={() => setModalAprovacao(item)}
                                 className="bg-indigo-600 hover:bg-indigo-700 text-white px-2.5 py-1.5 rounded-lg text-xs font-semibold transition shadow-sm"
@@ -552,26 +629,47 @@ export default function SolicitacoesApp() {
                               >
                                 Revisar
                               </button>
-                            )
+                            ))}
+
+                          {podeAlterar(item) && (
+                            <>
+                              <button
+                                onClick={() => abrirEdicao(item)}
+                                title="Editar"
+                                aria-label="Editar solicitação"
+                                className="p-1.5 rounded-lg text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition"
+                              >
+                                <Pencil className="w-4 h-4" />
+                              </button>
+                              <button
+                                onClick={() => setModalExcluir(item)}
+                                title="Excluir"
+                                aria-label="Excluir solicitação"
+                                className="p-1.5 rounded-lg text-slate-500 hover:text-rose-600 hover:bg-rose-50 transition"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </>
                           )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
 
       </div>
 
-      {/* MODAL: NOVA SOLICITAÇÃO (SOLICITANTE) */}
+      {/* MODAL: NOVA SOLICITAÇÃO / EDITAR SOLICITAÇÃO */}
       {modalAberto && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-200">
             <h2 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
-              <Plus className="w-5 h-5 text-indigo-600" /> Nova Solicitação
+              {editandoId ? <Pencil className="w-5 h-5 text-indigo-600" /> : <Plus className="w-5 h-5 text-indigo-600" />}
+              {editandoId ? 'Editar Solicitação' : 'Nova Solicitação'}
             </h2>
 
             <form onSubmit={handleSubmit} className="space-y-4">
@@ -606,7 +704,10 @@ export default function SolicitacoesApp() {
                   onChange={(e) => setForm({ ...form, tipo_solicitacao: e.target.value })}
                   className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                 >
-                  {TIPOS_SOLICITACAO.map((tipo) => (
+                  {(form.tipo_solicitacao && !TIPOS_SOLICITACAO.includes(form.tipo_solicitacao)
+                    ? [form.tipo_solicitacao, ...TIPOS_SOLICITACAO]
+                    : TIPOS_SOLICITACAO
+                  ).map((tipo) => (
                     <option key={tipo} value={tipo}>{tipo}</option>
                   ))}
                 </select>
@@ -626,7 +727,7 @@ export default function SolicitacoesApp() {
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
-                  onClick={() => setModalAberto(false)}
+                  onClick={fecharModalForm}
                   className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg text-sm font-medium"
                 >
                   Cancelar
@@ -635,7 +736,7 @@ export default function SolicitacoesApp() {
                   type="submit"
                   className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-semibold shadow-sm"
                 >
-                  Enviar Solicitação
+                  {editandoId ? 'Salvar alterações' : 'Enviar Solicitação'}
                 </button>
               </div>
             </form>
@@ -691,6 +792,37 @@ export default function SolicitacoesApp() {
                   Fechar sem alterar
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: CONFIRMAR EXCLUSÃO */}
+      {modalExcluir && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-xl border border-slate-200">
+            <h2 className="text-lg font-bold text-slate-800 mb-2 flex items-center gap-2">
+              <Trash2 className="w-5 h-5 text-rose-600" /> Excluir solicitação?
+            </h2>
+            <p className="text-sm text-slate-600">
+              A solicitação <strong>#{modalExcluir.cod_liberacao}</strong> (RCA {modalExcluir.rca} — {modalExcluir.tipo_solicitacao}) será removida
+              permanentemente. Essa ação não pode ser desfeita.
+            </p>
+            <div className="flex justify-end gap-2 pt-5">
+              <button
+                onClick={() => setModalExcluir(null)}
+                disabled={excluindo}
+                className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg text-sm font-medium disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleExcluir}
+                disabled={excluindo}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-sm font-semibold shadow-sm disabled:opacity-50"
+              >
+                {excluindo ? 'Excluindo...' : 'Excluir'}
+              </button>
             </div>
           </div>
         </div>
