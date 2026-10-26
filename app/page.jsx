@@ -1,49 +1,107 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { supabase } from '../lib/supabase';
+import React, { useState, useEffect } from 'react';
+import { supabase } from '@/lib/supabase';
+import toast from 'react-hot-toast';
+import confetti from 'canvas-confetti';
+import {
+  Clock, CheckCircle2, XCircle, AlertCircle, Plus, Search,
+  Download, RefreshCw, UserCheck, Send, MessageSquare, Shield, User, Trash2, Calendar
+} from 'lucide-react';
 
-export default function Home() {
+const TIPOS_SOLICITACAO = [
+  'Liberar Recebidos comprovantes',
+  'Aumento de limite',
+  'Alteração de prazo',
+  'Antecipação de boleto',
+  'Retirar taxa de boleto'
+];
+
+export default function SolicitacoesApp() {
   const [solicitacoes, setSolicitacoes] = useState([]);
-  const [cliente, setCliente] = useState('');
-  const [representante, setRepresentante] = useState('');
-  const [observacao, setObservacao] = useState('');
-  
+  const [loading, setLoading] = useState(true);
+  const [perfil, setPerfil] = useState('SOLICITANTE'); // 'SOLICITANTE' ou 'APROVADOR'
+  const [filtroStatus, setFiltroStatus] = useState('TODOS');
   const [busca, setBusca] = useState('');
   const [dataInicio, setDataInicio] = useState('');
   const [dataFim, setDataFim] = useState('');
-  
-  const [carregando, setCarregando] = useState(true);
-  const [enviando, setEnviando] = useState(false);
-  const [mensagem, setMensagem] = useState(null);
+  const [modalAberto, setModalAberto] = useState(false);
+  const [modalAprovacao, setModalAprovacao] = useState(null);
 
-  // Buscar solicitações no Supabase
-  const buscarSolicitacoes = async () => {
-    setCarregando(true);
+  const [form, setForm] = useState({
+    cod_liberacao: '',
+    rca: '',
+    tipo_solicitacao: TIPOS_SOLICITACAO[0],
+    observacoes: ''
+  });
+
+  const [motivoRecusaInput, setMotivoRecusaInput] = useState('');
+
+  // Tocar som de notificação
+  const playNotificationSound = () => {
+    try {
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(587.33, audioCtx.currentTime); // D5
+      osc.frequency.exponentialRampToValueAtTime(880, audioCtx.currentTime + 0.15); // A5
+      gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime + 0.3);
+    } catch (e) {
+      console.log('Audio not allowed without interaction');
+    }
+  };
+
+  // Carregar dados
+  const fetchSolicitacoes = async () => {
+    setLoading(true);
     const { data, error } = await supabase
       .from('solicitacoes')
       .select('*')
-      .order('created_at', { ascending: false });
+      .order('data_enviada', { ascending: false });
 
     if (error) {
-      console.error('Erro ao buscar solicitações:', error);
+      toast.error('Erro ao carregar solicitações');
     } else {
       setSolicitacoes(data || []);
     }
-    setCarregando(false);
+    setLoading(false);
   };
 
   useEffect(() => {
-    buscarSolicitacoes();
+    fetchSolicitacoes();
 
-    // Sincronização em tempo real (Realtime)
+    // Inscrever em atualizações Realtime do Supabase
     const channel = supabase
-      .channel('realtime-solicitacoes')
+      .channel('realtime_solicitacoes')
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'solicitacoes' },
-        () => {
-          buscarSolicitacoes();
+        (payload) => {
+          playNotificationSound();
+          if (payload.eventType === 'INSERT') {
+            toast.success(`Nova solicitação recebida: Pedido ${payload.new.cod_liberacao}`, {
+              icon: '🔔',
+              duration: 5000
+            });
+            setSolicitacoes((prev) => [payload.new, ...prev]);
+          } else if (payload.eventType === 'UPDATE') {
+            toast(`Solicitação ${payload.new.cod_liberacao} atualizada para [${payload.new.status}]`, {
+              icon: payload.new.status === 'SIM' ? '✅' : payload.new.status === 'NAO' ? '❌' : 'ℹ️',
+              duration: 4000
+            });
+            setSolicitacoes((prev) =>
+              prev.map((item) => (item.id === payload.new.id ? payload.new : item))
+            );
+          } else if (payload.eventType === 'DELETE') {
+            toast('Uma solicitação foi excluída.', { icon: '🗑️', duration: 3000 });
+            setSolicitacoes((prev) => prev.filter((item) => item.id !== payload.old.id));
+          }
         }
       )
       .subscribe();
@@ -53,315 +111,590 @@ export default function Home() {
     };
   }, []);
 
-  // Enviar Nova Solicitação
-  const handleNovaSolicitacao = async (e) => {
+  // Criar Solicitação
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!cliente.trim()) {
-      setMensagem({ tipo: 'erro', texto: 'Por favor, informe o nome do cliente.' });
+    if (!form.cod_liberacao || !form.rca) {
+      toast.error('Preencha os campos obrigatórios!');
       return;
     }
 
-    setEnviando(true);
-    setMensagem(null);
-
-    const { error } = await supabase.from('solicitacoes').insert([
+    const toastId = toast.loading('Enviando solicitação...');
+    const { data, error } = await supabase.from('solicitacoes').insert([
       {
-        cliente: cliente.trim(),
-        representante: representante.trim() || 'Não informado',
-        observacao: observacao.trim(),
-        status: 'Pendente',
-      },
+        cod_liberacao: form.cod_liberacao,
+        rca: form.rca,
+        tipo_solicitacao: form.tipo_solicitacao,
+        observacoes: form.observacoes,
+        status: 'PENDENTE',
+        data_enviada: new Date().toISOString()
+      }
     ]);
 
-    setEnviando(false);
-
     if (error) {
-      setMensagem({ tipo: 'erro', texto: 'Erro ao enviar: ' + error.message });
+      toast.error('Erro ao enviar: ' + error.message, { id: toastId });
     } else {
-      setMensagem({ tipo: 'sucesso', texto: 'Solicitação registrada com sucesso!' });
-      setCliente('');
-      setRepresentante('');
-      setObservacao('');
-      buscarSolicitacoes();
+      toast.success('Solicitação enviada com sucesso!', { id: toastId });
+      setModalAberto(false);
+      setForm({
+        cod_liberacao: '',
+        rca: '',
+        tipo_solicitacao: TIPOS_SOLICITACAO[0],
+        observacoes: ''
+      });
+      fetchSolicitacoes();
     }
   };
 
   // Excluir Solicitação
   const handleExcluir = async (id) => {
-    if (confirm('Tem certeza que deseja excluir esta solicitação?')) {
+    if (confirm('Tem certeza que deseja excluir esta solicitação permanentemente?')) {
+      const toastId = toast.loading('Excluindo solicitação...');
       const { error } = await supabase.from('solicitacoes').delete().eq('id', id);
+
       if (error) {
-        alert('Erro ao excluir: ' + error.message);
+        toast.error('Erro ao excluir: ' + error.message, { id: toastId });
       } else {
+        toast.success('Solicitação excluída com sucesso!', { id: toastId });
         setSolicitacoes((prev) => prev.filter((item) => item.id !== id));
       }
     }
   };
 
-  // Lógica de Filtro Dinâmico e por Data
-  const solicitacoesFiltradas = solicitacoes.filter((item) => {
-    const termo = busca.toLowerCase();
-    
-    const clienteTexto = String(item.cliente || item.nome_cliente || item.nome || '').toLowerCase();
-    const repTexto = String(item.representante || item.rep || '').toLowerCase();
-    const obsTexto = String(item.observacao || item.obs || '').toLowerCase();
-    const statusTexto = String(item.status || '').toLowerCase();
+  // Processar Aprovação/Recusa
+  const handleAprovarRecusar = async (statusAprovado) => {
+    if (!modalAprovacao) return;
 
-    const bateTexto =
-      !busca ||
-      clienteTexto.includes(termo) ||
-      repTexto.includes(termo) ||
-      obsTexto.includes(termo) ||
-      statusTexto.includes(termo);
+    if (!statusAprovado && !motivoRecusaInput.trim()) {
+      toast.error('Informe o motivo da recusa!');
+      return;
+    }
 
-    const dataCriacao = item.created_at ? item.created_at.split('T')[0] : '';
-    const bateDataInicio = !dataInicio || dataCriacao >= dataInicio;
-    const bateDataFim = !dataFim || dataCriacao <= dataFim;
+    const toastId = toast.loading('Processando resposta...');
+    const { error } = await supabase
+      .from('solicitacoes')
+      .update({
+        status: statusAprovado ? 'SIM' : 'NAO',
+        motivo_recusa: statusAprovado ? '' : motivoRecusaInput,
+        data_finalizada: new Date().toISOString()
+      })
+      .eq('id', modalAprovacao.id);
 
-    return bateTexto && bateDataInicio && bateDataFim;
+    if (error) {
+      toast.error('Erro ao atualizar: ' + error.message, { id: toastId });
+    } else {
+      if (statusAprovado) {
+        confetti({ particleCount: 50, spread: 60, origin: { y: 0.8 } });
+        toast.success('Solicitação APROVADA (SIM)!', { id: toastId });
+      } else {
+        toast.error('Solicitação RECUSADA (NÃO)', { id: toastId });
+      }
+      setModalAprovacao(null);
+      setMotivoRecusaInput('');
+      fetchSolicitacoes();
+    }
+  };
+
+  // Formatação de data e cálculo de tempo
+  const formatDateTime = (dateStr) => {
+    if (!dateStr) return '-';
+    return new Date(dateStr).toLocaleString('pt-BR', {
+      day: '2-digit', month: '2-digit', year: 'numeric',
+      hour: '2-digit', minute: '2-digit', second: '2-digit'
+    });
+  };
+
+  const calcularTempoConclusao = (inicio, fim) => {
+    if (!inicio || !fim) return '-';
+    const diff = new Date(fim) - new Date(inicio);
+    if (diff < 0) return '0:00';
+    const hrs = Math.floor(diff / 3600000);
+    const mins = Math.floor((diff % 3600000) / 60000);
+    const secs = Math.floor((diff % 60000) / 1000);
+    return `${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  // Exportar para CSV
+  const exportToCSV = () => {
+    const headers = ['Cód. Liberação', 'RCA', 'Tipo de Solicitação', 'Aprovado (SIM/NÃO)', 'Observações', 'Motivo Recusa', 'Data Enviada', 'Data Finalizada', 'Tempo Conclusão'];
+    const rows = solicitacoesFiltradas.map(s => [
+      s.cod_liberacao,
+      s.rca,
+      `"${s.tipo_solicitacao}"`,
+      s.status,
+      `"${(s.observacoes || '').replace(/"/g, '""')}"`,
+      `"${(s.motivo_recusa || '').replace(/"/g, '""')}"`,
+      formatDateTime(s.data_enviada),
+      formatDateTime(s.data_finalizada),
+      calcularTempoConclusao(s.data_enviada, s.data_finalizada)
+    ]);
+
+    const csvContent = 'data:text/csv;charset=utf-8,﻿' + [headers.join(';'), ...rows.map(e => e.join(';'))].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `solicitacoes_diarias_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  // Filtros dinâmicos e por data
+  const solicitacoesFiltradas = solicitacoes.filter(item => {
+    const matchStatus = filtroStatus === 'TODOS' || item.status === filtroStatus;
+    const matchSearch =
+      item.cod_liberacao?.toLowerCase().includes(busca.toLowerCase()) ||
+      item.rca?.toLowerCase().includes(busca.toLowerCase()) ||
+      item.tipo_solicitacao?.toLowerCase().includes(busca.toLowerCase()) ||
+      item.observacoes?.toLowerCase().includes(busca.toLowerCase());
+
+    const dataCriacao = item.data_enviada ? item.data_enviada.split('T')[0] : '';
+    const matchDataInicio = !dataInicio || dataCriacao >= dataInicio;
+    const matchDataFim = !dataFim || dataCriacao <= dataFim;
+
+    return matchStatus && matchSearch && matchDataInicio && matchDataFim;
   });
 
   return (
-    <main className="min-h-screen bg-slate-100 p-3 sm:p-6 text-slate-800">
-      <div className="max-w-5xl mx-auto space-y-6">
+    <div className="min-h-screen bg-slate-100 p-3 sm:p-6">
+      <div className="max-w-7xl mx-auto space-y-5">
         
-        {/* Cabeçalho */}
-        <div className="bg-white p-4 sm:p-6 rounded-2xl shadow-sm border border-slate-200">
-          <h1 className="text-2xl font-bold text-slate-900">Solicitações Diárias</h1>
-          <p className="text-xs sm:text-sm text-slate-500 mt-1">
-            Gestão e acompanhamento de solicitações em tempo real.
-          </p>
-        </div>
-
-        {/* Formulário de Envio */}
-        <div className="bg-white p-4 sm:p-6 rounded-2xl shadow-sm border border-slate-200">
-          <h2 className="text-lg font-bold text-slate-900 mb-4">Nova Solicitação</h2>
-          
-          {mensagem && (
-            <div
-              className={`p-3 rounded-lg mb-4 text-sm font-medium ${
-                mensagem.tipo === 'sucesso'
-                  ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
-                  : 'bg-rose-50 text-rose-800 border border-rose-200'
-              }`}
-            >
-              {mensagem.texto}
+        {/* CABEÇALHO */}
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-4 sm:p-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="p-2 bg-indigo-50 text-indigo-600 rounded-lg">
+                <Send className="w-6 h-6" />
+              </span>
+              <h1 className="text-xl sm:text-2xl font-bold text-slate-800">Solicitações Diárias</h1>
             </div>
-          )}
-
-          <form onSubmit={handleNovaSolicitacao} className="space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">
-                  Cliente *
-                </label>
-                <input
-                  type="text"
-                  placeholder="Nome do cliente"
-                  value={cliente}
-                  onChange={(e) => setCliente(e.target.value)}
-                  className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">
-                  Representante
-                </label>
-                <input
-                  type="text"
-                  placeholder="Nome do representante"
-                  value={representante}
-                  onChange={(e) => setRepresentante(e.target.value)}
-                  className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-slate-600 uppercase mb-1">
-                Observação / Detalhes
-              </label>
-              <textarea
-                rows="2"
-                placeholder="Descreva a solicitação..."
-                value={observacao}
-                onChange={(e) => setObservacao(e.target.value)}
-                className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-
-            <button
-              type="submit"
-              disabled={enviando}
-              className="w-full sm:w-auto px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-medium text-sm rounded-lg transition shadow-sm disabled:opacity-50"
-            >
-              {enviando ? 'Enviando...' : 'Cadastrar Solicitação'}
-            </button>
-          </form>
-        </div>
-
-        {/* Filtros de Pesquisa e Data */}
-        <div className="bg-white p-4 sm:p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
-          <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2">
-            <h2 className="text-lg font-bold text-slate-900">Histórico de Solicitações</h2>
-            <span className="text-xs bg-slate-100 text-slate-600 px-2.5 py-1 rounded-full font-semibold w-fit">
-              Total: {solicitacoesFiltradas.length}
-            </span>
+            <p className="text-slate-500 text-sm mt-1">Gestão de liberações, aumentos de limite e prazos em tempo real</p>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Troca de Perfil (Simulação) */}
+            <div className="bg-slate-100 p-1 rounded-xl flex items-center border border-slate-200">
+              <button
+                onClick={() => setPerfil('SOLICITANTE')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition ${
+                  perfil === 'SOLICITANTE' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <User className="w-3.5 h-3.5" /> Solicitante (RCA)
+              </button>
+              <button
+                onClick={() => setPerfil('APROVADOR')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition ${
+                  perfil === 'APROVADOR' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                <Shield className="w-3.5 h-3.5" /> Aprovador
+              </button>
+            </div>
+
+            {/* Botão de Nova Solicitação (Apenas Solicitante) */}
+            {perfil === 'SOLICITANTE' && (
+              <button
+                onClick={() => setModalAberto(true)}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-sm font-semibold flex items-center gap-2 transition shadow-sm"
+              >
+                <Plus className="w-4 h-4" /> Nova Solicitação
+              </button>
+            )}
+
+            <button
+              onClick={exportToCSV}
+              className="border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 px-3 py-2 rounded-xl text-sm font-medium flex items-center gap-2 transition"
+            >
+              <Download className="w-4 h-4" /> Exportar CSV
+            </button>
+          </div>
+        </div>
+
+        {/* ESTATÍSTICAS RÁPIDAS */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
             <div>
-              <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">
-                Busca Dinâmica
-              </label>
+              <p className="text-xs font-medium text-slate-500">Total Registrado</p>
+              <p className="text-xl font-bold text-slate-800">{solicitacoes.length}</p>
+            </div>
+            <span className="p-2 bg-slate-100 text-slate-600 rounded-lg"><RefreshCw className="w-4 h-4" /></span>
+          </div>
+
+          <div className="bg-white p-4 rounded-xl border border-amber-200 bg-amber-50/30 shadow-sm flex items-center justify-between">
+            <div>
+              <p className="text-xs font-medium text-amber-700">Pendentes</p>
+              <p className="text-xl font-bold text-amber-800">{solicitacoes.filter(s => s.status === 'PENDENTE').length}</p>
+            </div>
+            <span className="p-2 bg-amber-100 text-amber-600 rounded-lg"><Clock className="w-4 h-4" /></span>
+          </div>
+
+          <div className="bg-white p-4 rounded-xl border border-emerald-200 bg-emerald-50/30 shadow-sm flex items-center justify-between">
+            <div>
+              <p className="text-xs font-medium text-emerald-700">Aprovados (SIM)</p>
+              <p className="text-xl font-bold text-emerald-800">{solicitacoes.filter(s => s.status === 'SIM').length}</p>
+            </div>
+            <span className="p-2 bg-emerald-100 text-emerald-600 rounded-lg"><CheckCircle2 className="w-4 h-4" /></span>
+          </div>
+
+          <div className="bg-white p-4 rounded-xl border border-rose-200 bg-rose-50/30 shadow-sm flex items-center justify-between">
+            <div>
+              <p className="text-xs font-medium text-rose-700">Recusados (NÃO)</p>
+              <p className="text-xl font-bold text-rose-800">{solicitacoes.filter(s => s.status === 'NAO').length}</p>
+            </div>
+            <span className="p-2 bg-rose-100 text-rose-600 rounded-lg"><XCircle className="w-4 h-4" /></span>
+          </div>
+        </div>
+
+        {/* BARRA DE FILTROS, BUSCA E DATAS */}
+        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm space-y-3">
+          <div className="flex flex-col md:flex-row items-center justify-between gap-3">
+            <div className="relative w-full md:w-80">
+              <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
                 type="text"
-                placeholder="Pesquisar cliente, rep..."
+                placeholder="Buscar Cód, RCA, Tipo ou Obs..."
                 value={busca}
                 onChange={(e) => setBusca(e.target.value)}
-                className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full pl-9 pr-4 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
               />
             </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">
-                Data Inicial
-              </label>
-              <input
-                type="date"
-                value={dataInicio}
-                onChange={(e) => setDataInicio(e.target.value)}
-                className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
+            {/* Filtros de Data */}
+            <div className="flex items-center gap-2 w-full md:w-auto">
+              <div className="flex items-center gap-1 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1">
+                <Calendar className="w-3.5 h-3.5 text-slate-400" />
+                <span className="text-xs text-slate-500">De:</span>
+                <input
+                  type="date"
+                  value={dataInicio}
+                  onChange={(e) => setDataInicio(e.target.value)}
+                  className="bg-transparent text-xs text-slate-700 focus:outline-none"
+                />
+              </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">
-                Data Final
-              </label>
-              <input
-                type="date"
-                value={dataFim}
-                onChange={(e) => setDataFim(e.target.value)}
-                className="w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
+              <div className="flex items-center gap-1 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1">
+                <Calendar className="w-3.5 h-3.5 text-slate-400" />
+                <span className="text-xs text-slate-500">Até:</span>
+                <input
+                  type="date"
+                  value={dataFim}
+                  onChange={(e) => setDataFim(e.target.value)}
+                  className="bg-transparent text-xs text-slate-700 focus:outline-none"
+                />
+              </div>
+
+              {(dataInicio || dataFim || busca) && (
+                <button
+                  onClick={() => { setBusca(''); setDataInicio(''); setDataFim(''); }}
+                  className="text-xs text-indigo-600 hover:underline font-semibold whitespace-nowrap px-2"
+                >
+                  Limpar
+                </button>
+              )}
             </div>
           </div>
 
-          {(busca || dataInicio || dataFim) && (
-            <button
-              onClick={() => {
-                setBusca('');
-                setDataInicio('');
-                setDataFim('');
-              }}
-              className="text-xs text-rose-600 hover:underline font-semibold"
-            >
-              Limpar Filtros
-            </button>
+          <div className="flex items-center gap-2 w-full overflow-x-auto pt-2 border-t border-slate-100">
+            {['TODOS', 'PENDENTE', 'SIM', 'NAO'].map((st) => (
+              <button
+                key={st}
+                onClick={() => setFiltroStatus(st)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition whitespace-nowrap ${
+                  filtroStatus === st
+                    ? 'bg-slate-800 text-white'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                {st === 'TODOS' ? 'Todos' : st === 'PENDENTE' ? 'Em Análise' : st === 'SIM' ? 'Aprovados (SIM)' : 'Recusados (NÃO)'}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* LISTAGEM: CARDS NO CELULAR / TABELA NO COMPUTADOR */}
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+          {loading ? (
+            <div className="p-8 text-center text-slate-500">Carregando solicitações...</div>
+          ) : solicitacoesFiltradas.length === 0 ? (
+            <div className="p-8 text-center text-slate-500">Nenhuma solicitação encontrada.</div>
+          ) : (
+            <>
+              {/* VISÃO MOBILE: CARDS (Aparece apenas em telas pequenas) */}
+              <div className="block md:hidden divide-y divide-slate-200">
+                {solicitacoesFiltradas.map((item) => (
+                  <div key={item.id} className="p-4 space-y-3">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <span className="text-xs font-bold text-slate-400">Cód: #{item.cod_liberacao}</span>
+                        <h3 className="font-bold text-base text-slate-800">{item.tipo_solicitacao}</h3>
+                      </div>
+                      <span
+                        className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold ${
+                          item.status === 'SIM'
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : item.status === 'NAO'
+                            ? 'bg-rose-100 text-rose-800'
+                            : 'bg-amber-100 text-amber-800'
+                        }`}
+                      >
+                        {item.status === 'SIM' ? 'SIM' : item.status === 'NAO' ? 'NÃO' : 'EM ANÁLISE'}
+                      </span>
+                    </div>
+
+                    <div className="text-xs space-y-1 text-slate-600">
+                      <p><strong>RCA:</strong> {item.rca}</p>
+                      <p><strong>Enviada:</strong> {formatDateTime(item.data_enviada)}</p>
+                      {item.data_finalizada && <p><strong>Finalizada:</strong> {formatDateTime(item.data_finalizada)}</p>}
+                      {item.data_enviada && item.data_finalizada && (
+                        <p><strong>Tempo:</strong> <span className="font-mono">{calcularTempoConclusao(item.data_enviada, item.data_finalizada)}</span></p>
+                      )}
+                      {item.observacoes && (
+                        <p className="bg-slate-50 p-2 rounded text-slate-700 mt-1">
+                          <strong>Obs:</strong> {item.observacoes}
+                        </p>
+                      )}
+                      {item.motivo_recusa && (
+                        <p className="bg-rose-50 text-rose-700 p-2 rounded mt-1">
+                          <strong>Motivo Recusa:</strong> {item.motivo_recusa}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="pt-2 flex justify-between items-center border-t border-slate-100">
+                      <button
+                        onClick={() => handleExcluir(item.id)}
+                        className="text-xs font-semibold text-rose-600 bg-rose-50 hover:bg-rose-100 px-3 py-1.5 rounded-lg flex items-center gap-1 transition"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" /> Excluir
+                      </button>
+
+                      {perfil === 'APROVADOR' && (
+                        <button
+                          onClick={() => setModalAprovacao(item)}
+                          className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition shadow-sm"
+                        >
+                          {item.status === 'PENDENTE' ? 'Avaliar' : 'Revisar'}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* VISÃO DESKTOP: TABELA (Aparece em telas médias/grandes) */}
+              <div className="hidden md:block overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs sm:text-sm">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold uppercase tracking-wider">
+                      <th className="p-3">Cód. P / Liberação</th>
+                      <th className="p-3">RCA</th>
+                      <th className="p-3">Tipo de Solicitação</th>
+                      <th className="p-3 text-center">Status (SIM/NÃO)</th>
+                      <th className="p-3">Observações</th>
+                      <th className="p-3">Motivo Recusa</th>
+                      <th className="p-3">Enviada em</th>
+                      <th className="p-3">Finalizada em</th>
+                      <th className="p-3 text-center">Tempo Conclusão</th>
+                      <th className="p-3 text-center">Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200">
+                    {solicitacoesFiltradas.map((item) => (
+                      <tr key={item.id} className="hover:bg-slate-50/80 transition">
+                        <td className="p-3 font-semibold text-slate-800">{item.cod_liberacao}</td>
+                        <td className="p-3 font-medium text-slate-600">{item.rca}</td>
+                        <td className="p-3">{item.tipo_solicitacao}</td>
+                        <td className="p-3 text-center">
+                          <span
+                            className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold ${
+                              item.status === 'SIM'
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : item.status === 'NAO'
+                                ? 'bg-rose-100 text-rose-800'
+                                : 'bg-amber-100 text-amber-800'
+                            }`}
+                          >
+                            {item.status === 'SIM' ? 'SIM' : item.status === 'NAO' ? 'NÃO' : 'EM ANÁLISE'}
+                          </span>
+                        </td>
+                        <td className="p-3 max-w-xs truncate text-slate-600" title={item.observacoes}>
+                          {item.observacoes || '-'}
+                        </td>
+                        <td className="p-3 max-w-xs truncate text-rose-600 font-medium" title={item.motivo_recusa}>
+                          {item.motivo_recusa || '-'}
+                        </td>
+                        <td className="p-3 text-slate-500 whitespace-nowrap">{formatDateTime(item.data_enviada)}</td>
+                        <td className="p-3 text-slate-500 whitespace-nowrap">{formatDateTime(item.data_finalizada)}</td>
+                        <td className="p-3 text-center font-mono text-xs font-semibold text-slate-700">
+                          {calcularTempoConclusao(item.data_enviada, item.data_finalizada)}
+                        </td>
+                        <td className="p-3 text-center flex items-center justify-center gap-2">
+                          <button
+                            onClick={() => handleExcluir(item.id)}
+                            className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-lg transition"
+                            title="Excluir solicitação"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                          {perfil === 'APROVADOR' && (
+                            item.status === 'PENDENTE' ? (
+                              <button
+                                onClick={() => setModalAprovacao(item)}
+                                className="bg-indigo-600 hover:bg-indigo-700 text-white px-2.5 py-1.5 rounded-lg text-xs font-semibold transition shadow-sm"
+                              >
+                                Avaliar
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => setModalAprovacao(item)}
+                                className="text-slate-400 hover:text-slate-600 text-xs font-medium underline"
+                              >
+                                Revisar
+                              </button>
+                            )
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
           )}
         </div>
 
-        {/* Listagem: Cards no Celular / Tabela no Desktop */}
-        {carregando ? (
-          <div className="text-center py-12 text-slate-500 font-medium">Carregando solicitações...</div>
-        ) : solicitacoesFiltradas.length === 0 ? (
-          <div className="text-center py-10 bg-white rounded-2xl border border-slate-200 text-slate-500 text-sm">
-            Nenhuma solicitação encontrada.
-          </div>
-        ) : (
-          <div>
-            {/* CARDS APENAS PARA CELULAR */}
-            <div className="block sm:hidden space-y-3">
-              {solicitacoesFiltradas.map((item) => (
-                <div key={item.id} className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 space-y-3">
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <span className="text-xs font-bold text-slate-400">#{item.id}</span>
-                      <h3 className="font-bold text-base text-slate-900">
-                        {item.cliente || item.nome_cliente || item.nome || 'Cliente não informado'}
-                      </h3>
-                    </div>
-                    <span className="px-2.5 py-1 text-xs font-semibold rounded-full bg-blue-50 text-blue-700 border border-blue-200">
-                      {item.status || 'Pendente'}
-                    </span>
-                  </div>
-
-                  <div className="text-xs space-y-1.5 text-slate-600">
-                    <p>
-                      <strong className="text-slate-800">Representante:</strong> {item.representante || item.rep || '-'}
-                    </p>
-                    <p>
-                      <strong className="text-slate-800">Data:</strong>{' '}
-                      {item.created_at ? new Date(item.created_at).toLocaleDateString('pt-BR') : '-'}
-                    </p>
-                    {(item.observacao || item.obs) && (
-                      <p className="bg-slate-50 p-2.5 rounded-lg text-slate-700 mt-2 border border-slate-100">
-                        <strong>Obs:</strong> {item.observacao || item.obs}
-                      </p>
-                    )}
-                  </div>
-
-                  <div className="pt-2 border-t border-slate-100 flex justify-end">
-                    <button
-                      onClick={() => handleExcluir(item.id)}
-                      className="px-3 py-1.5 text-xs font-semibold text-rose-600 bg-rose-50 hover:bg-rose-100 rounded-lg transition"
-                    >
-                      Excluir
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            {/* TABELA APENAS PARA COMPUTADOR */}
-            <div className="hidden sm:block bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-              <table className="w-full text-left border-collapse">
-                <thead className="bg-slate-50 border-b border-slate-200 text-xs text-slate-500 uppercase">
-                  <tr>
-                    <th className="p-4">ID</th>
-                    <th className="p-4">Cliente</th>
-                    <th className="p-4">Representante</th>
-                    <th className="p-4">Data</th>
-                    <th className="p-4">Status</th>
-                    <th className="p-4 text-right">Ações</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 text-sm">
-                  {solicitacoesFiltradas.map((item) => (
-                    <tr key={item.id} className="hover:bg-slate-50/80 transition">
-                      <td className="p-4 font-bold text-slate-400">#{item.id}</td>
-                      <td className="p-4 font-semibold text-slate-900">
-                        {item.cliente || item.nome_cliente || item.nome || '-'}
-                      </td>
-                      <td className="p-4 text-slate-600">{item.representante || item.rep || '-'}</td>
-                      <td className="p-4 text-slate-600">
-                        {item.created_at ? new Date(item.created_at).toLocaleDateString('pt-BR') : '-'}
-                      </td>
-                      <td className="p-4">
-                        <span className="px-2.5 py-1 text-xs font-semibold rounded-full bg-blue-50 text-blue-700 border border-blue-200">
-                          {item.status || 'Pendente'}
-                        </span>
-                      </td>
-                      <td className="p-4 text-right">
-                        <button
-                          onClick={() => handleExcluir(item.id)}
-                          className="px-3 py-1 text-xs font-semibold text-rose-600 bg-rose-50 hover:bg-rose-100 rounded-lg transition"
-                        >
-                          Excluir
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
       </div>
-    </main>
+
+      {/* MODAL: NOVA SOLICITAÇÃO (SOLICITANTE) */}
+      {modalAberto && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-200">
+            <h2 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+              <Plus className="w-5 h-5 text-indigo-600" /> Nova Solicitação
+            </h2>
+
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Cód. P / Liberação *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Ex: 541532"
+                  value={form.cod_liberacao}
+                  onChange={(e) => setForm({ ...form, cod_liberacao: e.target.value })}
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Código RCA *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Ex: 1203"
+                  value={form.rca}
+                  onChange={(e) => setForm({ ...form, rca: e.target.value })}
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Tipo de Solicitação</label>
+                <select
+                  value={form.tipo_solicitacao}
+                  onChange={(e) => setForm({ ...form, tipo_solicitacao: e.target.value })}
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                >
+                  {TIPOS_SOLICITACAO.map((tipo) => (
+                    <option key={tipo} value={tipo}>{tipo}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Observações</label>
+                <textarea
+                  rows={3}
+                  placeholder="Informe detalhes da liberação ou instrução do RCA..."
+                  value={form.observacoes}
+                  onChange={(e) => setForm({ ...form, observacoes: e.target.value })}
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setModalAberto(false)}
+                  className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg text-sm font-medium"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-semibold shadow-sm"
+                >
+                  Enviar Solicitação
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: AVALIAR / APROVAR / RECUSAR (APROVADOR) */}
+      {modalAprovacao && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-200">
+            <h2 className="text-lg font-bold text-slate-800 mb-2">Avaliar Solicitação #{modalAprovacao.cod_liberacao}</h2>
+            <p className="text-xs text-slate-500 mb-4">RCA: {modalAprovacao.rca} | Tipo: {modalAprovacao.tipo_solicitacao}</p>
+
+            {modalAprovacao.observacoes && (
+              <div className="bg-slate-50 p-3 rounded-lg text-xs text-slate-700 border border-slate-200 mb-4">
+                <strong>Obs. do Solicitante:</strong> {modalAprovacao.observacoes}
+              </div>
+            )}
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Motivo da Recusa (Obrigatório se Negar)</label>
+                <textarea
+                  rows={2}
+                  placeholder="Ex: TÍTULO VENCIDO / EM ANÁLISE PELO CRÉDITO..."
+                  value={motivoRecusaInput}
+                  onChange={(e) => setMotivoRecusaInput(e.target.value)}
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 pt-2">
+                <button
+                  onClick={() => handleAprovarRecusar(false)}
+                  className="w-full bg-rose-600 hover:bg-rose-700 text-white py-2 rounded-xl text-sm font-semibold flex items-center justify-center gap-1.5 shadow-sm"
+                >
+                  <XCircle className="w-4 h-4" /> Recusar (NÃO)
+                </button>
+                <button
+                  onClick={() => handleAprovarRecusar(true)}
+                  className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-2 rounded-xl text-sm font-semibold flex items-center justify-center gap-1.5 shadow-sm"
+                >
+                  <CheckCircle2 className="w-4 h-4" /> Aprovar (SIM)
+                </button>
+              </div>
+
+              <div className="text-center pt-2">
+                <button
+                  onClick={() => { setModalAprovacao(null); setMotivoRecusaInput(''); }}
+                  className="text-xs text-slate-500 hover:text-slate-800 underline"
+                >
+                  Fechar sem alterar
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
