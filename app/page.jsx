@@ -8,7 +8,7 @@ import {
   Clock, CheckCircle2, XCircle, AlertCircle, Plus, Search,
   Download, RefreshCw, UserCheck, Send, MessageSquare, Shield, User,
   Pencil, Trash2, X, CalendarDays,
-  Paperclip, FileText, Music, Image as ImageIcon, ExternalLink
+  Paperclip, FileText, Music, Image as ImageIcon, ExternalLink, Mic, Square, Eye
 } from 'lucide-react';
 
 const TIPOS_SOLICITACAO = [
@@ -94,6 +94,11 @@ const iconeAnexo = (tipo = '', cls = 'w-4 h-4') =>
   tipo.startsWith('audio/') ? <Music className={cls} /> :
   <FileText className={cls} />;
 
+const MAX_SEGUNDOS_GRAVACAO = 300; // 5 minutos
+
+const formatarTempo = (seg) =>
+  `${Math.floor(seg / 60)}:${String(seg % 60).padStart(2, '0')}`;
+
 const formVazio = () => ({
   cod_liberacao: '',
   rca: '',
@@ -126,6 +131,14 @@ export default function SolicitacoesApp() {
   const [novosArquivos, setNovosArquivos] = useState([]);       // escolhidos agora (File[])
   const [anexosAbertoId, setAnexosAbertoId] = useState(null);   // janela de visualização
   const [urlsAnexos, setUrlsAnexos] = useState({});
+  const [preview, setPreview] = useState(null);                // {url, nome, tipo, local}
+  const [gravando, setGravando] = useState(false);
+  const [segundos, setSegundos] = useState(0);
+  const gravadorRef = useRef(null);
+  const chunksRef = useRef([]);
+  const streamRef = useRef(null);
+  const timerRef = useRef(null);
+  const descartarRef = useRef(false);
 
   const [form, setForm] = useState({
     cod_liberacao: '',
@@ -309,11 +322,168 @@ export default function SolicitacoesApp() {
   };
 
   const fecharModalForm = () => {
+    cancelarGravacao();
     setModalAberto(false);
     setEditandoId(null);
     setForm(formVazio());
     limparAnexosForm();
   };
+
+  // ===== Visualização do anexo (tela cheia, com botão Fechar) =====
+  const fecharPreview = () => {
+    setPreview((atual) => {
+      if (atual?.local) URL.revokeObjectURL(atual.url);
+      return null;
+    });
+  };
+
+  // Anexo já salvo no Storage
+  const abrirPreviewSalvo = async (a) => {
+    const toastId = toast.loading('Abrindo...');
+    try {
+      const { data, error } = await supabase.storage.from(BUCKET).createSignedUrl(a.path, 600);
+      if (error || !data?.signedUrl) throw error || new Error('sem link');
+      if (a.tipo === 'application/pdf') {
+        // baixa como blob para o navegador conseguir exibir o PDF dentro da página
+        const resp = await fetch(data.signedUrl);
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(new Blob([blob], { type: 'application/pdf' }));
+        setPreview({ url, nome: a.nome, tipo: a.tipo, local: true });
+      } else {
+        setPreview({ url: data.signedUrl, nome: a.nome, tipo: a.tipo, local: false });
+      }
+      toast.dismiss(toastId);
+    } catch (e) {
+      toast.error('Não foi possível abrir o arquivo.', { id: toastId });
+    }
+  };
+
+  // Arquivo escolhido agora (ainda não enviado)
+  const abrirPreviewLocal = (f) => {
+    const tipo = tipoDoArquivo(f);
+    const url = URL.createObjectURL(new Blob([f], { type: tipo }));
+    setPreview({ url, nome: f.name, tipo, local: true });
+  };
+
+  // Esc fecha a visualização
+  useEffect(() => {
+    if (!preview) return;
+    const onKey = (e) => { if (e.key === 'Escape') fecharPreview(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [preview]);
+
+  // ===== Gravação de áudio =====
+  const pararTimer = () => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+  };
+
+  const liberarMicrofone = () => {
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+  };
+
+  const iniciarGravacao = async () => {
+    if (gravando) return;
+    if (anexosExistentes.length + novosArquivos.length >= MAX_ARQUIVOS) {
+      toast.error(`Máximo de ${MAX_ARQUIVOS} anexos por solicitação.`);
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      toast.error('Este navegador não permite gravar áudio (use HTTPS e um navegador atualizado).');
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+
+      const preferidos = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus'];
+      const mime = preferidos.find((m) => MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(m)) || '';
+      const rec = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+
+      chunksRef.current = [];
+      descartarRef.current = false;
+      rec.ondataavailable = (ev) => {
+        if (ev.data && ev.data.size) chunksRef.current.push(ev.data);
+      };
+      rec.onstop = () => {
+        liberarMicrofone();
+        if (descartarRef.current) {
+          descartarRef.current = false;
+          return;
+        }
+        const tipo = (rec.mimeType || mime || 'audio/webm').split(';')[0];
+        const blob = new Blob(chunksRef.current, { type: tipo });
+        if (!blob.size) {
+          toast.error('Nenhum áudio foi gravado.');
+          return;
+        }
+        if (blob.size > MAX_BYTES) {
+          toast.error(`O áudio passa de ${MAX_MB} MB.`);
+          return;
+        }
+        const ext = tipo.includes('mp4') ? 'm4a' : tipo.includes('ogg') ? 'ogg' : 'webm';
+        const d = new Date();
+        const hh = String(d.getHours()).padStart(2, '0');
+        const mm = String(d.getMinutes()).padStart(2, '0');
+        const ss = String(d.getSeconds()).padStart(2, '0');
+        const file = new File([blob], `audio-${hh}${mm}${ss}.${ext}`, { type: tipo });
+        setNovosArquivos((prev) => [...prev, file]);
+        toast.success('Áudio gravado e adicionado aos anexos.');
+      };
+
+      gravadorRef.current = rec;
+      rec.start();
+      setSegundos(0);
+      setGravando(true);
+      timerRef.current = setInterval(() => {
+        setSegundos((s) => {
+          if (s + 1 >= MAX_SEGUNDOS_GRAVACAO) pararGravacao();
+          return s + 1;
+        });
+      }, 1000);
+    } catch (err) {
+      liberarMicrofone();
+      toast.error(
+        err?.name === 'NotAllowedError'
+          ? 'Permita o uso do microfone para gravar.'
+          : 'Não foi possível acessar o microfone.'
+      );
+    }
+  };
+
+  const pararGravacao = () => {
+    const rec = gravadorRef.current;
+    if (rec && rec.state !== 'inactive') rec.stop();
+    pararTimer();
+    setGravando(false);
+    setSegundos(0);
+  };
+
+  const cancelarGravacao = () => {
+    const rec = gravadorRef.current;
+    if (rec && rec.state !== 'inactive') {
+      descartarRef.current = true;
+      rec.stop();
+    } else {
+      liberarMicrofone();
+    }
+    pararTimer();
+    setGravando(false);
+    setSegundos(0);
+  };
+
+  // Ao sair da página, solta o microfone
+  useEffect(() => () => {
+    descartarRef.current = true;
+    const rec = gravadorRef.current;
+    if (rec && rec.state !== 'inactive') rec.stop();
+    pararTimer();
+    liberarMicrofone();
+  }, []);
 
   // Escolher arquivos no formulário (valida tipo, tamanho e quantidade)
   const escolherArquivos = (e) => {
@@ -418,6 +588,10 @@ export default function SolicitacoesApp() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (enviando) return;
+    if (gravando) {
+      toast.error('Pare a gravação antes de enviar.');
+      return;
+    }
     const cod = form.cod_liberacao.trim();
     const rca = form.rca.trim();
     if (!cod || !rca) {
@@ -1104,28 +1278,34 @@ export default function SolicitacoesApp() {
                     const url = urlsAnexos[a.path];
                     return (
                       <div key={a.path} className="fade-in border border-slate-200 rounded-xl p-3 space-y-2">
-                        <div className="flex items-center gap-2 text-sm">
+                        <button
+                          type="button"
+                          onClick={() => abrirPreviewSalvo(a)}
+                          className="w-full flex items-center gap-2 text-sm text-left rounded-lg hover:bg-slate-50 -m-1 p-1 transition"
+                          title="Clique para visualizar"
+                        >
                           <span className="text-indigo-600">{iconeAnexo(a.tipo, 'w-5 h-5')}</span>
-                          <span className="truncate flex-1 font-medium text-slate-800" title={a.nome}>{a.nome}</span>
+                          <span className="truncate flex-1 font-medium text-slate-800">{a.nome}</span>
                           <span className="text-xs text-slate-400 whitespace-nowrap">{formatarTamanho(a.tamanho)}</span>
-                        </div>
+                        </button>
 
                         {url && a.tipo?.startsWith('image/') && (
-                          <img src={url} alt={a.nome} className="w-full max-h-72 object-contain rounded-lg bg-slate-50" />
+                          <img
+                            src={url}
+                            alt={a.nome}
+                            onClick={() => abrirPreviewSalvo(a)}
+                            className="w-full max-h-72 object-contain rounded-lg bg-slate-50 cursor-zoom-in"
+                          />
                         )}
                         {url && a.tipo?.startsWith('audio/') && <audio controls src={url} className="w-full" />}
 
                         <div className="flex gap-2">
-                          {url && (a.tipo === 'application/pdf' || a.tipo?.startsWith('image/')) && (
-                            <a
-                              href={url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg text-xs font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200 transition"
-                            >
-                              <ExternalLink className="w-4 h-4" /> Abrir
-                            </a>
-                          )}
+                          <button
+                            onClick={() => abrirPreviewSalvo(a)}
+                            className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg text-xs font-semibold bg-slate-100 text-slate-700 hover:bg-slate-200 transition"
+                          >
+                            <Eye className="w-4 h-4" /> Visualizar
+                          </button>
                           <button
                             onClick={() => baixarAnexo(a)}
                             className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white transition"
@@ -1151,6 +1331,39 @@ export default function SolicitacoesApp() {
           </div>
         );
       })()}
+
+      {/* VISUALIZAÇÃO DO ANEXO (TELA CHEIA) */}
+      {preview && (
+        <div className="fixed inset-0 z-[90] bg-slate-900/90 backdrop-blur-sm flex flex-col fade-in">
+          <div className="flex items-center justify-between gap-3 px-4 pt-[calc(0.75rem+env(safe-area-inset-top))] pb-3 text-white">
+            <span className="truncate text-sm font-medium" title={preview.nome}>{preview.nome}</span>
+            <button
+              onClick={fecharPreview}
+              aria-label="Fechar visualização"
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-white/15 hover:bg-white/25 text-sm font-semibold transition shrink-0"
+            >
+              <X className="w-4 h-4" /> Fechar
+            </button>
+          </div>
+          <div
+            className="flex-1 min-h-0 flex items-center justify-center px-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]"
+            onClick={(e) => { if (e.target === e.currentTarget) fecharPreview(); }}
+          >
+            {preview.tipo?.startsWith('image/') && (
+              <img src={preview.url} alt={preview.nome} className="max-w-full max-h-full object-contain rounded-lg" />
+            )}
+            {preview.tipo?.startsWith('audio/') && (
+              <div className="w-full max-w-md bg-white rounded-2xl p-5 flex flex-col items-center gap-3">
+                <Music className="w-8 h-8 text-indigo-600" />
+                <audio controls autoPlay src={preview.url} className="w-full" />
+              </div>
+            )}
+            {preview.tipo === 'application/pdf' && (
+              <iframe src={preview.url} title={preview.nome} className="w-full h-full rounded-lg bg-white" />
+            )}
+          </div>
+        </div>
+      )}
 
       {/* BOTÃO FLUTUANTE (CELULAR, SOLICITANTE) */}
       {perfil === 'SOLICITANTE' && (
@@ -1226,12 +1439,43 @@ export default function SolicitacoesApp() {
 
               <div>
                 <label className="block text-xs font-semibold text-slate-600 mb-1">Anexos (imagem, áudio ou PDF)</label>
-                <label
-                  htmlFor="anexo-input"
-                  className="flex items-center justify-center gap-2 border-2 border-dashed border-slate-300 hover:border-indigo-400 hover:bg-indigo-50/40 text-slate-600 rounded-lg px-3 py-3 text-sm cursor-pointer transition"
-                >
-                  <Paperclip className="w-4 h-4" /> Toque para anexar arquivos
-                </label>
+                {gravando ? (
+                  <div className="flex items-center gap-2 border-2 border-rose-300 bg-rose-50 rounded-lg px-3 py-2.5 text-sm">
+                    <span className="w-2.5 h-2.5 rounded-full bg-rose-600 animate-pulse" />
+                    <span className="font-semibold text-rose-700 tabular-nums">Gravando {formatarTempo(segundos)}</span>
+                    <span className="flex-1" />
+                    <button
+                      type="button"
+                      onClick={cancelarGravacao}
+                      className="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-slate-600 hover:bg-white"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={pararGravacao}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-rose-600 hover:bg-rose-700 text-white"
+                    >
+                      <Square className="w-3.5 h-3.5" /> Parar
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex gap-2">
+                    <label
+                      htmlFor="anexo-input"
+                      className="flex-1 flex items-center justify-center gap-2 border-2 border-dashed border-slate-300 hover:border-indigo-400 hover:bg-indigo-50/40 text-slate-600 rounded-lg px-3 py-3 text-sm cursor-pointer transition"
+                    >
+                      <Paperclip className="w-4 h-4" /> Anexar arquivos
+                    </label>
+                    <button
+                      type="button"
+                      onClick={iniciarGravacao}
+                      className="inline-flex items-center justify-center gap-2 border-2 border-dashed border-slate-300 hover:border-rose-400 hover:bg-rose-50/40 text-slate-600 rounded-lg px-3 py-3 text-sm transition"
+                    >
+                      <Mic className="w-4 h-4" /> Gravar áudio
+                    </button>
+                  </div>
+                )}
                 <input
                   id="anexo-input"
                   type="file"
@@ -1247,7 +1491,14 @@ export default function SolicitacoesApp() {
                     {anexosExistentes.map((a) => (
                       <li key={a.path} className="fade-in flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs">
                         <span className="text-slate-500">{iconeAnexo(a.tipo)}</span>
-                        <span className="truncate flex-1" title={a.nome}>{a.nome}</span>
+                        <button
+                          type="button"
+                          onClick={() => abrirPreviewSalvo(a)}
+                          className="truncate flex-1 text-left hover:text-indigo-700 hover:underline"
+                          title="Clique para visualizar"
+                        >
+                          {a.nome}
+                        </button>
                         <span className="text-slate-400 whitespace-nowrap">{formatarTamanho(a.tamanho)}</span>
                         <button
                           type="button"
@@ -1265,7 +1516,14 @@ export default function SolicitacoesApp() {
                     {novosArquivos.map((f, idx) => (
                       <li key={`${f.name}-${idx}`} className="fade-in flex items-center gap-2 bg-indigo-50/50 border border-indigo-100 rounded-lg px-2.5 py-1.5 text-xs">
                         <span className="text-indigo-500">{iconeAnexo(tipoDoArquivo(f))}</span>
-                        <span className="truncate flex-1" title={f.name}>{f.name}</span>
+                        <button
+                          type="button"
+                          onClick={() => abrirPreviewLocal(f)}
+                          className="truncate flex-1 text-left hover:text-indigo-700 hover:underline"
+                          title="Clique para visualizar"
+                        >
+                          {f.name}
+                        </button>
                         <span className="text-slate-400 whitespace-nowrap">{formatarTamanho(f.size)}</span>
                         <button
                           type="button"
