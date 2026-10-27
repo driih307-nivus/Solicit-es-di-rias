@@ -8,7 +8,7 @@ import {
   Clock, CheckCircle2, XCircle, AlertCircle, Plus, Search,
   Download, RefreshCw, UserCheck, Send, MessageSquare, Shield, User,
   Pencil, Trash2, X, CalendarDays,
-  Paperclip, FileText, Music, Image as ImageIcon, ExternalLink, Mic, Square, Eye
+  Paperclip, FileText, Music, Image as ImageIcon, ExternalLink, Mic, Square, Eye, Bell, BellOff
 } from 'lucide-react';
 
 const TIPOS_SOLICITACAO = [
@@ -240,10 +240,21 @@ export default function SolicitacoesApp() {
 
   const [motivoRecusaInput, setMotivoRecusaInput] = useState('');
 
-  // Tocar som de notificação
+  // ===== Som de notificação (o mesmo beep de sempre) =====
+  const audioCtxRef = useRef(null);
+
+  const obterAudioCtx = () => {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    if (!audioCtxRef.current) audioCtxRef.current = new AC();
+    return audioCtxRef.current;
+  };
+
   const playNotificationSound = () => {
     try {
-      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const audioCtx = obterAudioCtx();
+      if (!audioCtx) return;
+      if (audioCtx.state === 'suspended') audioCtx.resume();
       const osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
       osc.type = 'sine';
@@ -257,6 +268,82 @@ export default function SolicitacoesApp() {
       osc.stop(audioCtx.currentTime + 0.3);
     } catch (e) {
       console.log('Audio not allowed without interaction');
+    }
+  };
+
+  // Libera o áudio no primeiro toque/clique (o navegador exige isso para tocar com a aba em segundo plano)
+  useEffect(() => {
+    const liberar = () => {
+      try {
+        const ctx = obterAudioCtx();
+        if (ctx && ctx.state === 'suspended') ctx.resume();
+      } catch (e) {}
+    };
+    window.addEventListener('pointerdown', liberar, { once: true });
+    window.addEventListener('keydown', liberar, { once: true });
+    return () => {
+      window.removeEventListener('pointerdown', liberar);
+      window.removeEventListener('keydown', liberar);
+    };
+  }, []);
+
+  // ===== Aviso do sistema (canto da tela, como o WhatsApp Web) =====
+  const [avisosPerm, setAvisosPerm] = useState('default'); // default | granted | denied | nao-suportado
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('Notification' in window)) {
+      setAvisosPerm('nao-suportado');
+    } else {
+      setAvisosPerm(Notification.permission);
+    }
+  }, []);
+
+  const mostrarAviso = (titulo, corpo, tag) => {
+    try {
+      if (typeof window === 'undefined' || !('Notification' in window)) return;
+      if (Notification.permission !== 'granted') return;
+      const n = new Notification(titulo, {
+        body: corpo,
+        tag, // avisos do mesmo pedido substituem o anterior
+        silent: true // o som é o beep do próprio app (evita som duplo)
+      });
+      n.onclick = () => {
+        window.focus();
+        n.close();
+      };
+      setTimeout(() => n.close(), 10000);
+    } catch (e) {
+      // alguns celulares não permitem aviso direto da página
+    }
+  };
+
+  const ativarAvisos = async () => {
+    if (!('Notification' in window)) return;
+    let perm = Notification.permission;
+    if (perm === 'default') {
+      perm = await Notification.requestPermission();
+      setAvisosPerm(perm);
+    }
+    if (perm === 'granted') {
+      playNotificationSound();
+      mostrarAviso('Avisos ativados', 'Você será avisado aqui quando chegar uma novidade.', 'teste');
+      toast.success('Avisos ativados!');
+    } else if (perm === 'denied') {
+      toast.error('Avisos bloqueados. Clique no cadeado ao lado do endereço do site e permita as notificações.', { duration: 7000 });
+    }
+  };
+
+  // Mostra o aviso do sistema quando a janela não está em primeiro plano
+  const avisarSistema = (payload) => {
+    if (typeof document === 'undefined') return;
+    if (!document.hidden && document.hasFocus()) return; // já está olhando para o app
+    if (payload.eventType === 'INSERT') {
+      const n = payload.new;
+      mostrarAviso('Nova solicitação', `Pedido ${n.cod_liberacao} • RCA ${n.rca} • ${n.tipo_solicitacao}`, `sol-${n.id}`);
+    } else if (payload.eventType === 'UPDATE') {
+      const n = payload.new;
+      const rotulo = n.status === 'SIM' ? 'Aprovada ✅' : n.status === 'NAO' ? 'Recusada ❌' : 'Pendente';
+      mostrarAviso(`Solicitação ${n.cod_liberacao}`, `Status: ${rotulo}`, `sol-${n.id}`);
     }
   };
 
@@ -357,6 +444,7 @@ export default function SolicitacoesApp() {
         { event: '*', schema: 'public', table: 'solicitacoes' },
         (payload) => {
           playNotificationSound();
+          avisarSistema(payload);
           if (payload.eventType === 'INSERT') {
             toast.success(`Nova solicitação recebida: Pedido ${payload.new.cod_liberacao}`, {
               icon: '🔔',
@@ -1208,6 +1296,29 @@ export default function SolicitacoesApp() {
                 className="hidden md:flex bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-sm font-semibold items-center gap-2 transition shadow-sm"
               >
                 <Plus className="w-4 h-4" /> Nova Solicitação
+              </button>
+            )}
+
+            {avisosPerm !== 'nao-suportado' && (
+              <button
+                onClick={ativarAvisos}
+                title={
+                  avisosPerm === 'granted'
+                    ? 'Avisos ativos — clique para testar o aviso e o som'
+                    : avisosPerm === 'denied'
+                    ? 'Bloqueado no navegador: clique no cadeado ao lado do endereço e permita as notificações'
+                    : 'Receber avisos no canto da tela, com som'
+                }
+                className={`flex-1 md:flex-none justify-center px-3 py-2.5 md:py-2 rounded-xl text-sm font-medium flex items-center gap-2 transition border ${
+                  avisosPerm === 'granted'
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                    : avisosPerm === 'denied'
+                    ? 'border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100'
+                    : 'border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100'
+                }`}
+              >
+                {avisosPerm === 'denied' ? <BellOff className="w-4 h-4" /> : <Bell className="w-4 h-4" />}
+                {avisosPerm === 'granted' ? 'Avisos ativos' : avisosPerm === 'denied' ? 'Avisos bloqueados' : 'Ativar avisos'}
               </button>
             )}
 
