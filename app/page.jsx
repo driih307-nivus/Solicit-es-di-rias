@@ -120,6 +120,26 @@ const formVazio = () => ({
   observacoes: ''
 });
 
+// O caso aparece no período se foi enviado OU reaberto dentro dele
+const noPeriodo = (item, ini, fim) => {
+  if (!ini && !fim) return true;
+  const dentro = (v) => {
+    const d = paraDataLocal(v);
+    return Boolean(d) && (!ini || d >= ini) && (!fim || d <= fim);
+  };
+  return dentro(item.data_enviada) || dentro(item.reaberta_em);
+};
+
+// Ordem da lista: o que foi reaberto sobe para o topo (pela hora da reabertura)
+const ultimaMovimentacao = (i) => new Date(i.reaberta_em || i.data_enviada).getTime() || 0;
+
+// Uma atualização é "reabertura" quando um caso respondido volta para PENDENTE
+const ehReabertura = (antes, novo) => {
+  if (novo.status !== 'PENDENTE') return false;
+  if (antes) return antes.status !== 'PENDENTE';
+  return Boolean(novo.reaberta_em && Date.now() - new Date(novo.reaberta_em).getTime() < 20000);
+};
+
 const TONS = {
   indigo: { icone: 'bg-indigo-50 text-indigo-600', botao: 'bg-indigo-600 hover:bg-indigo-700' },
   emerald: { icone: 'bg-emerald-50 text-emerald-600', botao: 'bg-emerald-600 hover:bg-emerald-700' },
@@ -244,6 +264,8 @@ export default function SolicitacoesApp() {
   // Lista atual acessível dentro do tempo real (sem recriar a inscrição)
   const solicitacoesRef = useRef([]);
   solicitacoesRef.current = solicitacoes;
+  const periodoRef = useRef({});
+  periodoRef.current = { ini: dataInicio, fim: dataFim };
 
   // ===== Tema claro / escuro =====
   const [tema, setTema] = useState('claro');
@@ -405,8 +427,7 @@ export default function SolicitacoesApp() {
       mostrarAviso('Nova solicitação', `Pedido ${n.cod_liberacao} • RCA ${n.rca} • ${n.tipo_solicitacao}`, `sol-${n.id}`);
     } else if (payload.eventType === 'UPDATE') {
       const n = payload.new;
-      const antes = solicitacoesRef.current.find((i) => i.id === n.id);
-      const reaberta = Boolean(antes && antes.status !== 'PENDENTE' && n.status === 'PENDENTE');
+      const reaberta = ehReabertura(solicitacoesRef.current.find((i) => i.id === n.id), n);
       const rotulo = reaberta
         ? 'Reaberta 🔄 — voltou para análise'
         : n.status === 'SIM' ? 'Aprovada ✅' : n.status === 'NAO' ? 'Recusada ❌' : 'Pendente';
@@ -418,14 +439,28 @@ export default function SolicitacoesApp() {
   const fetchSolicitacoes = async () => {
     const reqId = ++reqRef.current;
     setLoading(true);
-    let q = supabase
-      .from('solicitacoes')
-      .select('*')
-      .order('data_enviada', { ascending: false })
-      .limit(LIMITE_LINHAS);
-    if (dataInicio) q = q.gte('data_enviada', new Date(`${dataInicio}T00:00:00`).toISOString());
-    if (dataFim) q = q.lte('data_enviada', new Date(`${dataFim}T23:59:59.999`).toISOString());
-    const { data, error } = await q;
+    const ini = dataInicio ? new Date(`${dataInicio}T00:00:00`).toISOString() : null;
+    const fim = dataFim ? new Date(`${dataFim}T23:59:59.999`).toISOString() : null;
+    const montar = (comReaberta) => {
+      let q = supabase
+        .from('solicitacoes')
+        .select('*')
+        .order('data_enviada', { ascending: false })
+        .limit(LIMITE_LINHAS);
+      if (!comReaberta || (!ini && !fim)) {
+        if (ini) q = q.gte('data_enviada', ini);
+        if (fim) q = q.lte('data_enviada', fim);
+        return q;
+      }
+      const grupo = (campo) => {
+        const c = [ini && `${campo}.gte.${ini}`, fim && `${campo}.lte.${fim}`].filter(Boolean);
+        return c.length > 1 ? `and(${c.join(',')})` : c[0];
+      };
+      return q.or(`${grupo('data_enviada')},${grupo('reaberta_em')}`);
+    };
+    let resp = await montar(true);
+    if (resp.error) resp = await montar(false); // coluna reaberta_em ainda não criada
+    const { data, error } = resp;
     if (reqId !== reqRef.current) return; // resposta antiga, ignora
 
     if (error) {
@@ -494,12 +529,19 @@ export default function SolicitacoesApp() {
   // Pendentes de dias anteriores (para não passarem despercebidas na tela limpa)
   useEffect(() => {
     if (!pronto || !hoje) return;
-    supabase
-      .from('solicitacoes')
-      .select('id', { count: 'exact', head: true })
-      .eq('status', 'PENDENTE')
-      .lt('data_enviada', new Date(`${hoje}T00:00:00`).toISOString())
-      .then(({ count }) => setPendentesAnteriores(count || 0));
+    const corte = new Date(`${hoje}T00:00:00`).toISOString();
+    const base = () =>
+      supabase
+        .from('solicitacoes')
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'PENDENTE')
+        .lt('data_enviada', corte);
+    base()
+      .or(`reaberta_em.is.null,reaberta_em.lt.${corte}`)
+      .then(({ count, error }) => {
+        if (error) base().then((r) => setPendentesAnteriores(r.count || 0)); // sem a coluna nova
+        else setPendentesAnteriores(count || 0);
+      });
   }, [pronto, hoje, solicitacoes]);
 
   useEffect(() => {
@@ -519,17 +561,21 @@ export default function SolicitacoesApp() {
             });
             setSolicitacoes((prev) => [payload.new, ...prev]);
           } else if (payload.eventType === 'UPDATE') {
-            const antes = solicitacoesRef.current.find((i) => i.id === payload.new.id);
-            const reaberta = Boolean(antes && antes.status !== 'PENDENTE' && payload.new.status === 'PENDENTE');
+            const reaberta = ehReabertura(solicitacoesRef.current.find((i) => i.id === payload.new.id), payload.new);
             toast(reaberta
               ? `Solicitação ${payload.new.cod_liberacao} reaberta — voltou para análise`
               : `Solicitação ${payload.new.cod_liberacao} atualizada para [${payload.new.status}]`, {
               icon: reaberta ? '🔄' : payload.new.status === 'SIM' ? '✅' : payload.new.status === 'NAO' ? '❌' : 'ℹ️',
               duration: 4000
             });
-            setSolicitacoes((prev) =>
-              prev.map((item) => (item.id === payload.new.id ? payload.new : item))
-            );
+            setSolicitacoes((prev) => {
+              if (prev.some((item) => item.id === payload.new.id)) {
+                return prev.map((item) => (item.id === payload.new.id ? payload.new : item));
+              }
+              // caso de outro dia reaberto agora: entra na lista se cair no período exibido
+              const { ini, fim } = periodoRef.current;
+              return noPeriodo(payload.new, ini, fim) ? [payload.new, ...prev] : prev;
+            });
           } else if (payload.eventType === 'DELETE') {
             setSolicitacoes((prev) => prev.filter((item) => item.id !== payload.old.id));
           }
@@ -1107,7 +1153,7 @@ export default function SolicitacoesApp() {
   const pedirReabrir = (item) =>
     pedirConfirmacao({
       titulo: 'Reabrir solicitação?',
-      mensagem: 'Ela volta para análise. Observações e anexos continuam; a resposta anterior fica guardada no histórico.',
+      mensagem: 'Ela volta para análise e sobe para o topo. Observações, motivo da recusa e anexos são mantidos; a resposta anterior fica no histórico.',
       icone: <RotateCcw className="w-5 h-5" />,
       tom: 'amber',
       textoConfirmar: 'Reabrir',
@@ -1129,21 +1175,22 @@ export default function SolicitacoesApp() {
       por: perfil,
       status_anterior: item.status,
       motivo_recusa: item.motivo_recusa || '',
+      observacoes: item.observacoes || '',
       finalizada_em: item.data_finalizada || null
     };
     const { data, error } = await supabase
       .from('solicitacoes')
       .update({
         status: 'PENDENTE',
-        motivo_recusa: '',
         data_finalizada: null,
+        reaberta_em: entrada.em,
         historico: [...(item.historico || []), entrada]
       })
       .eq('id', item.id)
       .select();
 
     if (error) {
-      const dica = /historico/i.test(error.message) ? ' (rode o arquivo reabrir.sql no Supabase)' : '';
+      const dica = /historico|reaberta_em/i.test(error.message) ? ' (rode o arquivo reabrir.sql no Supabase)' : '';
       toast.error('Erro ao reabrir: ' + error.message + dica, { id: toastId, duration: 7000 });
     } else if (!data || data.length === 0) {
       toast.error('Não foi possível reabrir. Verifique a permissão de UPDATE (RLS) da tabela.', { id: toastId });
@@ -1216,12 +1263,7 @@ export default function SolicitacoesApp() {
   // Itens dentro do período selecionado (base dos contadores)
   const doPeriodo = useMemo(
     () =>
-      solicitacoes.filter((item) => {
-        const dia = paraDataLocal(item.data_enviada);
-        if (dataInicio && (!dia || dia < dataInicio)) return false;
-        if (dataFim && (!dia || dia > dataFim)) return false;
-        return true;
-      }),
+      solicitacoes.filter((item) => noPeriodo(item, dataInicio, dataFim)),
     [solicitacoes, dataInicio, dataFim]
   );
 
@@ -1232,9 +1274,7 @@ export default function SolicitacoesApp() {
     return solicitacoes.filter((item) => {
       if (filtroStatus !== 'TODOS' && item.status !== filtroStatus) return false;
 
-      const dia = paraDataLocal(item.data_enviada);
-      if (dataInicio && (!dia || dia < dataInicio)) return false;
-      if (dataFim && (!dia || dia > dataFim)) return false;
+      if (!noPeriodo(item, dataInicio, dataFim)) return false;
 
       if (termos.length === 0) return true;
 
@@ -1254,7 +1294,7 @@ export default function SolicitacoesApp() {
       );
       // Todos os termos digitados precisam aparecer (em qualquer campo)
       return termos.every((termo) => alvo.includes(termo));
-    });
+    }).sort((a, b) => ultimaMovimentacao(b) - ultimaMovimentacao(a)); // reabertos no topo
   }, [solicitacoes, filtroStatus, busca, dataInicio, dataFim]);
 
   const visaoPadrao = seguindoHoje && dataInicio === hoje && dataFim === hoje;
@@ -1302,16 +1342,21 @@ export default function SolicitacoesApp() {
       : `${dataInicio ? formatarDia(dataInicio) : 'início'} a ${dataFim ? formatarDia(dataFim) : 'hoje'}`;
 
   const badge = (item) => (
-    <span
-      className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold whitespace-nowrap ${
-        item.status === 'SIM'
-          ? 'bg-emerald-100 text-emerald-800'
-          : item.status === 'NAO'
-          ? 'bg-rose-100 text-rose-800'
-          : 'bg-amber-100 text-amber-800'
-      }`}
-    >
-      {item.status === 'SIM' ? 'SIM' : item.status === 'NAO' ? 'NÃO' : 'EM ANÁLISE'}
+    <span className="inline-flex flex-col items-center gap-0.5">
+      <span
+        className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold whitespace-nowrap ${
+          item.status === 'SIM'
+            ? 'bg-emerald-100 text-emerald-800'
+            : item.status === 'NAO'
+            ? 'bg-rose-100 text-rose-800'
+            : 'bg-amber-100 text-amber-800'
+        }`}
+      >
+        {item.status === 'SIM' ? 'SIM' : item.status === 'NAO' ? 'NÃO' : 'EM ANÁLISE'}
+      </span>
+      {item.status === 'PENDENTE' && item.reaberta_em && (
+        <span className="text-[10px] font-semibold text-amber-700 whitespace-nowrap">🔄 Reaberta</span>
+      )}
     </span>
   );
 
@@ -1408,6 +1453,7 @@ export default function SolicitacoesApp() {
               <strong>{e.status_anterior === 'SIM' ? 'Aprovada (SIM)' : 'Recusada (NÃO)'}</strong>
               {e.finalizada_em ? ` em ${formatDateTime(e.finalizada_em)}` : ''}
               {e.motivo_recusa ? ` — Motivo: ${e.motivo_recusa}` : ''}
+              {e.observacoes && e.observacoes !== item.observacoes ? ` — Obs. do solicitante na época: ${e.observacoes}` : ''}
             </li>
           ))}
         </ul>
@@ -1764,7 +1810,7 @@ export default function SolicitacoesApp() {
                     <p className="text-xs text-slate-600 bg-slate-50 rounded-lg p-2.5 break-words">{item.observacoes}</p>
                   )}
                   {item.motivo_recusa && (
-                    <p className="text-xs text-rose-600 font-medium break-words">Motivo: {item.motivo_recusa}</p>
+                    <p className="text-xs text-rose-600 font-medium break-words">{item.status === 'PENDENTE' ? 'Recusa anterior' : 'Motivo'}: {item.motivo_recusa}</p>
                   )}
                   {(item.anexos || []).length > 0 && <div>{chipAnexos(item)}</div>}
 
@@ -2267,7 +2313,7 @@ export default function SolicitacoesApp() {
             )}
             {modalDetalhe.motivo_recusa && (
               <div className="bg-rose-50 p-3 rounded-lg text-xs text-rose-700 border border-rose-200 mb-3">
-                <strong>Motivo da recusa:</strong> {modalDetalhe.motivo_recusa}
+                <strong>{modalDetalhe.status === 'PENDENTE' ? 'Motivo da recusa anterior:' : 'Motivo da recusa:'}</strong> {modalDetalhe.motivo_recusa}
               </div>
             )}
             {blocoHistorico(modalDetalhe)}
