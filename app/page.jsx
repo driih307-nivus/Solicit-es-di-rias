@@ -19,6 +19,18 @@ const TIPOS_SOLICITACAO = [
   'Retirar taxa de boleto'
 ];
 
+// Cor de cada tipo de solicitação (legenda + identificação nas linhas)
+// Evita verde/vermelho/âmbar, que já indicam o status.
+const TIPO_CORES = {
+  'Liberar Recebidos comprovantes': { dot: 'bg-sky-500',     pill: 'bg-sky-100 text-sky-800 ring-sky-200',             borda: 'border-l-sky-500' },
+  'Aumento de limite':              { dot: 'bg-violet-500',  pill: 'bg-violet-100 text-violet-800 ring-violet-200',    borda: 'border-l-violet-500' },
+  'Alteração de prazo':             { dot: 'bg-fuchsia-500', pill: 'bg-fuchsia-100 text-fuchsia-800 ring-fuchsia-200', borda: 'border-l-fuchsia-500' },
+  'Antecipação de boleto':          { dot: 'bg-orange-500',  pill: 'bg-orange-100 text-orange-800 ring-orange-200',    borda: 'border-l-orange-500' },
+  'Retirar taxa de boleto':         { dot: 'bg-teal-500',    pill: 'bg-teal-100 text-teal-800 ring-teal-200',          borda: 'border-l-teal-500' }
+};
+const COR_PADRAO = { dot: 'bg-slate-400', pill: 'bg-slate-100 text-slate-700 ring-slate-200', borda: 'border-l-slate-400' };
+const corDoTipo = (t) => TIPO_CORES[t] || COR_PADRAO;
+
 // Remove acentos e ignora maiúsculas/minúsculas (ex.: "análise" == "analise")
 const normalizar = (v) =>
   String(v ?? '')
@@ -202,6 +214,7 @@ export default function SolicitacoesApp() {
   const [busca, setBusca] = useState('');
   const [modalAberto, setModalAberto] = useState(false);
   const [modalAprovacao, setModalAprovacao] = useState(null);
+  const [modalDetalhe, setModalDetalhe] = useState(null);       // visualização (solicitante)
   const [dataInicio, setDataInicio] = useState('');
   const [dataFim, setDataFim] = useState('');
   const [editandoId, setEditandoId] = useState(null);
@@ -499,6 +512,20 @@ export default function SolicitacoesApp() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [preview]);
+
+  // Esc fecha a solicitação aberta (só se não houver outra janela por cima)
+  useEffect(() => {
+    if (!modalAprovacao && !modalDetalhe) return;
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return;
+      if (preview || confirmacao || anexosAbertoId) return; // essas janelas tratam o próprio Esc
+      setModalAprovacao(null);
+      setModalDetalhe(null);
+      setMotivoRecusaInput('');
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [modalAprovacao, modalDetalhe, preview, confirmacao, anexosAbertoId]);
 
   // ===== Gravação de áudio =====
   const pararTimer = () => {
@@ -926,6 +953,17 @@ export default function SolicitacoesApp() {
     });
   };
 
+  // Data compacta para a tabela: 27/10/26 10:20
+  const formatDataCurta = (dateStr) => {
+    if (!dateStr) return '-';
+    const d = new Date(dateStr);
+    if (isNaN(d)) return '-';
+    return d.toLocaleString('pt-BR', {
+      day: '2-digit', month: '2-digit', year: '2-digit',
+      hour: '2-digit', minute: '2-digit'
+    }).replace(',', '');
+  };
+
   const calcularTempoConclusao = (inicio, fim) => {
     if (!inicio || !fim) return '-';
     const diff = new Date(fim) - new Date(inicio);
@@ -1125,9 +1163,24 @@ export default function SolicitacoesApp() {
     );
   };
 
+  // Clicar na solicitação abre ela direto (ignora cliques em botões da própria linha)
+  const abrirItem = (item, e) => {
+    if (e?.target?.closest?.('button, a, input, select, textarea')) return;
+    if (perfil === 'APROVADOR') setModalAprovacao(item);
+    else if (podeAlterar(item)) abrirEdicao(item);
+    else setModalDetalhe(item);
+  };
+
+  const pilulaTipo = (tipo, extra = '') => (
+    <span className={`inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-semibold leading-tight ring-1 ring-inset ${corDoTipo(tipo).pill} ${extra}`}>
+      <span className={`w-2 h-2 rounded-full shrink-0 ${corDoTipo(tipo).dot}`} />
+      <span className="min-w-0">{tipo}</span>
+    </span>
+  );
+
   return (
     <div className="min-h-screen bg-slate-100 p-3 sm:p-6 pb-24 md:pb-6 overflow-x-hidden">
-      <div className="max-w-7xl mx-auto space-y-4 sm:space-y-5">
+      <div className="max-w-[1800px] mx-auto space-y-4 sm:space-y-5">
         
         {/* CABEÇALHO */}
         <div className="fade-up bg-white rounded-2xl shadow-sm border border-slate-200 p-4 sm:p-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -1335,58 +1388,76 @@ export default function SolicitacoesApp() {
             </div>
           ) : (
             <>
-            <div className="overflow-x-auto hidden xl:block">
-              <table className="w-full text-left border-collapse text-xs sm:text-sm">
+            {/* LEGENDA DE CORES POR TIPO */}
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 px-3 sm:px-4 py-2.5 border-b border-slate-200 bg-white text-xs">
+              <span className="font-semibold text-slate-500 uppercase tracking-wider text-[11px]">Legenda:</span>
+              {TIPOS_SOLICITACAO.map((t) => (
+                <span key={t} className="inline-flex items-center gap-1.5 text-slate-700">
+                  <span className={`w-3 h-3 rounded-full ${corDoTipo(t).dot}`} />
+                  {t}
+                </span>
+              ))}
+            </div>
+
+            <div className="hidden xl:block">
+              <table className="w-full table-fixed text-left border-collapse text-xs">
+                <colgroup>
+                  <col style={{ width: '6%' }} />
+                  <col style={{ width: '11%' }} />
+                  <col style={{ width: '5%' }} />
+                  <col style={{ width: '14%' }} />
+                  <col style={{ width: '8%' }} />
+                  <col style={{ width: '12%' }} />
+                  <col style={{ width: '9%' }} />
+                  <col style={{ width: '8%' }} />
+                  <col style={{ width: '8%' }} />
+                  <col style={{ width: '6%' }} />
+                  <col style={{ width: '4%' }} />
+                  <col style={{ width: '9%' }} />
+                </colgroup>
                 <thead>
-                  <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold uppercase tracking-wider">
-                    <th className="p-3">Cód. Cliente</th>
-                    <th className="p-3">Cliente</th>
-                    <th className="p-3">RCA</th>
-                    <th className="p-3">Tipo de Solicitação</th>
-                    <th className="p-3 text-center">Status (SIM/NÃO)</th>
-                    <th className="p-3">Observações</th>
-                    <th className="p-3">Motivo Recusa</th>
-                    <th className="p-3">Enviada em</th>
-                    <th className="p-3">Finalizada em</th>
-                    <th className="p-3 text-center">Tempo Conclusão</th>
-                    <th className="p-3 text-center">Anexos</th>
-                    <th className="p-3 text-center">Ações</th>
+                  <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold uppercase text-[11px] leading-tight">
+                    <th className="px-2 py-2.5">Cód.</th>
+                    <th className="px-2 py-2.5">Cliente</th>
+                    <th className="px-2 py-2.5">RCA</th>
+                    <th className="px-2 py-2.5">Tipo</th>
+                    <th className="px-2 py-2.5 text-center">Status</th>
+                    <th className="px-2 py-2.5">Observações</th>
+                    <th className="px-2 py-2.5">Motivo recusa</th>
+                    <th className="px-2 py-2.5">Enviada</th>
+                    <th className="px-2 py-2.5">Finalizada</th>
+                    <th className="px-2 py-2.5 text-center">Tempo</th>
+                    <th className="px-2 py-2.5 text-center">Anexos</th>
+                    <th className="px-2 py-2.5 text-center">Ações</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200">
                   {solicitacoesFiltradas.map((item, idx) => (
-                    <tr key={item.id} className="fade-in hover:bg-slate-50/80 transition" style={{ animationDelay: `${Math.min(idx, 12) * 30}ms` }}>
-                      <td className="p-3 font-semibold text-slate-800">{item.cod_liberacao}</td>
-                      <td className="p-3 font-medium text-slate-700 max-w-[14rem] truncate" title={item.nome_cliente}>{item.nome_cliente || <span className="text-slate-300">-</span>}</td>
-                      <td className="p-3 font-medium text-slate-600">{item.rca}</td>
-                      <td className="p-3">{item.tipo_solicitacao}</td>
-                      <td className="p-3 text-center">
-                        <span
-                          className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold ${
-                            item.status === 'SIM'
-                              ? 'bg-emerald-100 text-emerald-800'
-                              : item.status === 'NAO'
-                              ? 'bg-rose-100 text-rose-800'
-                              : 'bg-amber-100 text-amber-800'
-                          }`}
-                        >
-                          {item.status === 'SIM' ? 'SIM' : item.status === 'NAO' ? 'NÃO' : 'EM ANÁLISE'}
-                        </span>
-                      </td>
-                      <td className="p-3 max-w-xs truncate text-slate-600" title={item.observacoes}>
+                    <tr
+                      key={item.id}
+                      onClick={(e) => abrirItem(item, e)}
+                      className="fade-in cursor-pointer hover:bg-indigo-50/40 transition"
+                      style={{ animationDelay: `${Math.min(idx, 12) * 30}ms` }}
+                    >
+                      <td className={`px-2 py-2.5 font-semibold text-slate-800 truncate border-l-4 ${corDoTipo(item.tipo_solicitacao).borda}`}>{item.cod_liberacao}</td>
+                      <td className="px-2 py-2.5 font-medium text-slate-700 truncate" title={item.nome_cliente}>{item.nome_cliente || <span className="text-slate-300">-</span>}</td>
+                      <td className="px-2 py-2.5 font-medium text-slate-600 truncate">{item.rca}</td>
+                      <td className="px-2 py-2.5">{pilulaTipo(item.tipo_solicitacao)}</td>
+                      <td className="px-2 py-2.5 text-center">{badge(item)}</td>
+                      <td className="px-2 py-2.5 truncate text-slate-600" title={item.observacoes}>
                         {item.observacoes || '-'}
                       </td>
-                      <td className="p-3 max-w-xs truncate text-rose-600 font-medium" title={item.motivo_recusa}>
+                      <td className="px-2 py-2.5 truncate text-rose-600 font-medium" title={item.motivo_recusa}>
                         {item.motivo_recusa || '-'}
                       </td>
-                      <td className="p-3 text-slate-500 whitespace-nowrap">{formatDateTime(item.data_enviada)}</td>
-                      <td className="p-3 text-slate-500 whitespace-nowrap">{formatDateTime(item.data_finalizada)}</td>
-                      <td className="p-3 text-center font-mono text-xs font-semibold text-slate-700">
+                      <td className="px-2 py-2.5 text-slate-500 whitespace-nowrap">{formatDataCurta(item.data_enviada)}</td>
+                      <td className="px-2 py-2.5 text-slate-500 whitespace-nowrap">{formatDataCurta(item.data_finalizada)}</td>
+                      <td className="px-2 py-2.5 text-center font-mono text-[11px] font-semibold text-slate-700">
                         {calcularTempoConclusao(item.data_enviada, item.data_finalizada)}
                       </td>
-                      <td className="p-3 text-center">{chipAnexos(item)}</td>
-                      <td className="p-3">
-                        <div className="flex items-center justify-center gap-1.5 whitespace-nowrap">{acoesItem(item)}</div>
+                      <td className="px-2 py-2.5 text-center">{chipAnexos(item)}</td>
+                      <td className="px-2 py-2.5">
+                        <div className="flex items-center justify-center gap-1 flex-wrap">{acoesItem(item)}</div>
                       </td>
                     </tr>
                   ))}
@@ -1399,7 +1470,8 @@ export default function SolicitacoesApp() {
               {solicitacoesFiltradas.map((item, idx) => (
                 <div
                   key={item.id}
-                  className="fade-in min-w-0 flex flex-col gap-3 bg-white border border-slate-200 rounded-2xl p-4 shadow-sm"
+                  onClick={(e) => abrirItem(item, e)}
+                  className={`fade-in min-w-0 flex flex-col gap-3 bg-white border border-slate-200 border-l-4 ${corDoTipo(item.tipo_solicitacao).borda} rounded-2xl p-4 shadow-sm cursor-pointer`}
                   style={{ animationDelay: `${Math.min(idx, 10) * 30}ms` }}
                 >
                   <div className="flex items-start justify-between gap-2">
@@ -1412,9 +1484,7 @@ export default function SolicitacoesApp() {
                     {badge(item)}
                   </div>
 
-                  <p className="text-sm font-medium text-indigo-700 bg-indigo-50 rounded-lg px-2.5 py-1.5 break-words">
-                    {item.tipo_solicitacao}
-                  </p>
+                  <div>{pilulaTipo(item.tipo_solicitacao, 'text-xs')}</div>
 
                   {item.observacoes && (
                     <p className="text-xs text-slate-600 bg-slate-50 rounded-lg p-2.5 break-words">{item.observacoes}</p>
@@ -1820,13 +1890,17 @@ export default function SolicitacoesApp() {
 
       {/* MODAL: AVALIAR / APROVAR / RECUSAR (APROVADOR) */}
       {modalAprovacao && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 z-50 fade-in">
-          <div className="bg-white rounded-t-2xl sm:rounded-2xl max-w-md w-full p-5 sm:p-6 shadow-xl border border-slate-200 max-h-[92vh] overflow-y-auto sheet-in pb-[calc(1.25rem+env(safe-area-inset-bottom))]">
+        <div
+          className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 z-50 fade-in"
+          onClick={() => { setModalAprovacao(null); setMotivoRecusaInput(''); }}
+        >
+          <div onClick={(e) => e.stopPropagation()} className="bg-white rounded-t-2xl sm:rounded-2xl max-w-md w-full p-5 sm:p-6 shadow-xl border border-slate-200 max-h-[92vh] overflow-y-auto sheet-in pb-[calc(1.25rem+env(safe-area-inset-bottom))]">
             <h2 className="text-lg font-bold text-slate-800 mb-1">Avaliar Solicitação #{modalAprovacao.cod_liberacao}</h2>
             {modalAprovacao.nome_cliente && (
               <p className="text-sm font-semibold text-slate-700 mb-1 break-words">{modalAprovacao.nome_cliente}</p>
             )}
-            <p className="text-xs text-slate-500 mb-4">RCA: {modalAprovacao.rca} | Tipo: {modalAprovacao.tipo_solicitacao}</p>
+            <p className="text-xs text-slate-500 mb-2">RCA: {modalAprovacao.rca}</p>
+            <div className="mb-4">{pilulaTipo(modalAprovacao.tipo_solicitacao)}</div>
 
             {modalAprovacao.observacoes && (
               <div className="bg-slate-50 p-3 rounded-lg text-xs text-slate-700 border border-slate-200 mb-4">
@@ -1876,10 +1950,62 @@ export default function SolicitacoesApp() {
                   onClick={() => { setModalAprovacao(null); setMotivoRecusaInput(''); }}
                   className="text-xs text-slate-500 hover:text-slate-800 underline"
                 >
-                  Fechar sem alterar
+                  Fechar sem alterar (Esc)
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: DETALHE (SOLICITANTE, SOMENTE LEITURA) */}
+      {modalDetalhe && (
+        <div
+          className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 z-50 fade-in"
+          onClick={() => setModalDetalhe(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white rounded-t-2xl sm:rounded-2xl max-w-md w-full p-5 sm:p-6 shadow-xl border border-slate-200 max-h-[92vh] overflow-y-auto sheet-in pb-[calc(1.25rem+env(safe-area-inset-bottom))]"
+          >
+            <h2 className="text-lg font-bold text-slate-800 mb-1">Solicitação #{modalDetalhe.cod_liberacao}</h2>
+            {modalDetalhe.nome_cliente && (
+              <p className="text-sm font-semibold text-slate-700 mb-1 break-words">{modalDetalhe.nome_cliente}</p>
+            )}
+            <p className="text-xs text-slate-500 mb-2">RCA: {modalDetalhe.rca}</p>
+            <div className="mb-3 flex items-center gap-2 flex-wrap">{pilulaTipo(modalDetalhe.tipo_solicitacao)} {badge(modalDetalhe)}</div>
+            {modalDetalhe.observacoes && (
+              <div className="bg-slate-50 p-3 rounded-lg text-xs text-slate-700 border border-slate-200 mb-3">
+                <strong>Observações:</strong> {modalDetalhe.observacoes}
+              </div>
+            )}
+            {modalDetalhe.motivo_recusa && (
+              <div className="bg-rose-50 p-3 rounded-lg text-xs text-rose-700 border border-rose-200 mb-3">
+                <strong>Motivo da recusa:</strong> {modalDetalhe.motivo_recusa}
+              </div>
+            )}
+            <div className="text-[11px] text-slate-500 space-y-0.5 mb-4">
+              <p>Enviada: {formatDateTime(modalDetalhe.data_enviada)}</p>
+              {modalDetalhe.data_finalizada && (
+                <p>Finalizada: {formatDateTime(modalDetalhe.data_finalizada)} · Tempo {calcularTempoConclusao(modalDetalhe.data_enviada, modalDetalhe.data_finalizada)}</p>
+              )}
+            </div>
+            {(modalDetalhe.anexos || []).length > 0 && (
+              <button
+                type="button"
+                onClick={() => setAnexosAbertoId(modalDetalhe.id)}
+                className="w-full mb-3 inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-sm font-semibold bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition"
+              >
+                <Paperclip className="w-4 h-4" /> Ver anexos ({modalDetalhe.anexos.length})
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setModalDetalhe(null)}
+              className="w-full px-4 py-2.5 text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl text-sm font-semibold transition"
+            >
+              Fechar (Esc)
+            </button>
           </div>
         </div>
       )}
