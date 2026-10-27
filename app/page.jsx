@@ -8,7 +8,7 @@ import {
   Clock, CheckCircle2, XCircle, AlertCircle, Plus, Search,
   Download, RefreshCw, UserCheck, Send, MessageSquare, Shield, User,
   Pencil, Trash2, X, CalendarDays,
-  Paperclip, FileText, Music, Image as ImageIcon, ExternalLink, Mic, Square, Eye, Bell, BellOff, Sun, Moon
+  Paperclip, FileText, Music, Image as ImageIcon, ExternalLink, Mic, Square, Eye, Bell, BellOff, Sun, Moon, RotateCcw
 } from 'lucide-react';
 
 const TIPOS_SOLICITACAO = [
@@ -123,7 +123,8 @@ const formVazio = () => ({
 const TONS = {
   indigo: { icone: 'bg-indigo-50 text-indigo-600', botao: 'bg-indigo-600 hover:bg-indigo-700' },
   emerald: { icone: 'bg-emerald-50 text-emerald-600', botao: 'bg-emerald-600 hover:bg-emerald-700' },
-  rose: { icone: 'bg-rose-50 text-rose-600', botao: 'bg-rose-600 hover:bg-rose-700' }
+  rose: { icone: 'bg-rose-50 text-rose-600', botao: 'bg-rose-600 hover:bg-rose-700' },
+  amber: { icone: 'bg-amber-50 text-amber-600', botao: 'bg-amber-600 hover:bg-amber-700' }
 };
 
 // Pop-up de confirmação com fade (entra e sai suavemente)
@@ -239,6 +240,10 @@ export default function SolicitacoesApp() {
   const [form, setForm] = useState(formVazio());
 
   const [motivoRecusaInput, setMotivoRecusaInput] = useState('');
+
+  // Lista atual acessível dentro do tempo real (sem recriar a inscrição)
+  const solicitacoesRef = useRef([]);
+  solicitacoesRef.current = solicitacoes;
 
   // ===== Tema claro / escuro =====
   const [tema, setTema] = useState('claro');
@@ -400,8 +405,12 @@ export default function SolicitacoesApp() {
       mostrarAviso('Nova solicitação', `Pedido ${n.cod_liberacao} • RCA ${n.rca} • ${n.tipo_solicitacao}`, `sol-${n.id}`);
     } else if (payload.eventType === 'UPDATE') {
       const n = payload.new;
-      const rotulo = n.status === 'SIM' ? 'Aprovada ✅' : n.status === 'NAO' ? 'Recusada ❌' : 'Pendente';
-      mostrarAviso(`Solicitação ${n.cod_liberacao}`, `Status: ${rotulo}`, `sol-${n.id}`);
+      const antes = solicitacoesRef.current.find((i) => i.id === n.id);
+      const reaberta = Boolean(antes && antes.status !== 'PENDENTE' && n.status === 'PENDENTE');
+      const rotulo = reaberta
+        ? 'Reaberta 🔄 — voltou para análise'
+        : n.status === 'SIM' ? 'Aprovada ✅' : n.status === 'NAO' ? 'Recusada ❌' : 'Pendente';
+      mostrarAviso(`Solicitação ${n.cod_liberacao}`, reaberta ? rotulo : `Status: ${rotulo}`, `sol-${n.id}`);
     }
   };
 
@@ -510,8 +519,12 @@ export default function SolicitacoesApp() {
             });
             setSolicitacoes((prev) => [payload.new, ...prev]);
           } else if (payload.eventType === 'UPDATE') {
-            toast(`Solicitação ${payload.new.cod_liberacao} atualizada para [${payload.new.status}]`, {
-              icon: payload.new.status === 'SIM' ? '✅' : payload.new.status === 'NAO' ? '❌' : 'ℹ️',
+            const antes = solicitacoesRef.current.find((i) => i.id === payload.new.id);
+            const reaberta = Boolean(antes && antes.status !== 'PENDENTE' && payload.new.status === 'PENDENTE');
+            toast(reaberta
+              ? `Solicitação ${payload.new.cod_liberacao} reaberta — voltou para análise`
+              : `Solicitação ${payload.new.cod_liberacao} atualizada para [${payload.new.status}]`, {
+              icon: reaberta ? '🔄' : payload.new.status === 'SIM' ? '✅' : payload.new.status === 'NAO' ? '❌' : 'ℹ️',
               duration: 4000
             });
             setSolicitacoes((prev) =>
@@ -1090,6 +1103,59 @@ export default function SolicitacoesApp() {
     }
   };
 
+  // Reabrir: volta para análise sem apagar nada (observações e anexos ficam; a resposta anterior vai para o histórico)
+  const pedirReabrir = (item) =>
+    pedirConfirmacao({
+      titulo: 'Reabrir solicitação?',
+      mensagem: 'Ela volta para análise. Observações e anexos continuam; a resposta anterior fica guardada no histórico.',
+      icone: <RotateCcw className="w-5 h-5" />,
+      tom: 'amber',
+      textoConfirmar: 'Reabrir',
+      detalhes: [
+        ['Cód. cliente', item.cod_liberacao],
+        ['Cliente', item.nome_cliente],
+        ['RCA', item.rca],
+        ['Resposta atual', item.status === 'SIM' ? 'Aprovada (SIM)' : 'Recusada (NÃO)']
+      ],
+      onConfirm: () => executarReabertura(item)
+    });
+
+  const executarReabertura = async (item) => {
+    if (item.status === 'PENDENTE') return;
+    const toastId = toast.loading('Reabrindo solicitação...');
+    const entrada = {
+      acao: 'reaberta',
+      em: new Date().toISOString(),
+      por: perfil,
+      status_anterior: item.status,
+      motivo_recusa: item.motivo_recusa || '',
+      finalizada_em: item.data_finalizada || null
+    };
+    const { data, error } = await supabase
+      .from('solicitacoes')
+      .update({
+        status: 'PENDENTE',
+        motivo_recusa: '',
+        data_finalizada: null,
+        historico: [...(item.historico || []), entrada]
+      })
+      .eq('id', item.id)
+      .select();
+
+    if (error) {
+      const dica = /historico/i.test(error.message) ? ' (rode o arquivo reabrir.sql no Supabase)' : '';
+      toast.error('Erro ao reabrir: ' + error.message + dica, { id: toastId, duration: 7000 });
+    } else if (!data || data.length === 0) {
+      toast.error('Não foi possível reabrir. Verifique a permissão de UPDATE (RLS) da tabela.', { id: toastId });
+    } else {
+      toast.success('Solicitação reaberta — voltou para análise.', { id: toastId });
+      setSolicitacoes((prev) => prev.map((i) => (i.id === data[0].id ? data[0] : i)));
+      setModalAprovacao(null);
+      setModalDetalhe(null);
+      setMotivoRecusaInput('');
+    }
+  };
+
   // Formatação de data e cálculo de tempo
   const formatDateTime = (dateStr) => {
     if (!dateStr) return '-';
@@ -1285,6 +1351,16 @@ export default function SolicitacoesApp() {
               Revisar
             </button>
           ))}
+        {item.status !== 'PENDENTE' && (
+          <button
+            onClick={() => pedirReabrir(item)}
+            title="Reabrir para análise"
+            aria-label="Reabrir solicitação"
+            className={`${pad} rounded-lg text-slate-500 hover:text-amber-600 hover:bg-amber-50 transition`}
+          >
+            <RotateCcw className={ic} />
+          </button>
+        )}
         {podeAlterar(item) && (
           <>
             <button
@@ -1315,6 +1391,28 @@ export default function SolicitacoesApp() {
     if (perfil === 'APROVADOR') setModalAprovacao(item);
     else if (podeAlterar(item)) abrirEdicao(item);
     else setModalDetalhe(item);
+  };
+
+  const blocoHistorico = (item) => {
+    const h = item.historico || [];
+    if (h.length === 0) return null;
+    return (
+      <div className="bg-amber-50 p-3 rounded-lg text-xs text-amber-800 border border-amber-200 mb-3">
+        <p className="font-semibold mb-1.5 flex items-center gap-1.5">
+          <RotateCcw className="w-3.5 h-3.5" /> Histórico de reaberturas ({h.length})
+        </p>
+        <ul className="space-y-1.5">
+          {[...h].reverse().map((e, i) => (
+            <li key={i} className="break-words">
+              Reaberta em {formatDateTime(e.em)} ({e.por === 'APROVADOR' ? 'aprovador' : 'solicitante'}). Resposta anterior:{' '}
+              <strong>{e.status_anterior === 'SIM' ? 'Aprovada (SIM)' : 'Recusada (NÃO)'}</strong>
+              {e.finalizada_em ? ` em ${formatDateTime(e.finalizada_em)}` : ''}
+              {e.motivo_recusa ? ` — Motivo: ${e.motivo_recusa}` : ''}
+            </li>
+          ))}
+        </ul>
+      </div>
+    );
   };
 
   const pilulaTipo = (tipo, extra = '') => (
@@ -2094,6 +2192,8 @@ export default function SolicitacoesApp() {
               </button>
             )}
 
+            {blocoHistorico(modalAprovacao)}
+
             <div className="space-y-3">
               <div>
                 <label className="block text-xs font-semibold text-slate-600 mb-1">Motivo da Recusa (Obrigatório se Negar)</label>
@@ -2120,6 +2220,16 @@ export default function SolicitacoesApp() {
                   <CheckCircle2 className="w-4 h-4" /> Aprovar (SIM)
                 </button>
               </div>
+
+              {modalAprovacao.status !== 'PENDENTE' && (
+                <button
+                  type="button"
+                  onClick={() => pedirReabrir(modalAprovacao)}
+                  className="w-full inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-sm font-semibold bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 transition"
+                >
+                  <RotateCcw className="w-4 h-4" /> Reabrir para análise
+                </button>
+              )}
 
               <div className="text-center pt-2">
                 <button
@@ -2160,6 +2270,7 @@ export default function SolicitacoesApp() {
                 <strong>Motivo da recusa:</strong> {modalDetalhe.motivo_recusa}
               </div>
             )}
+            {blocoHistorico(modalDetalhe)}
             <div className="text-[11px] text-slate-500 space-y-0.5 mb-4">
               <p>Enviada: {formatDateTime(modalDetalhe.data_enviada)}</p>
               {modalDetalhe.data_finalizada && (
@@ -2173,6 +2284,15 @@ export default function SolicitacoesApp() {
                 className="w-full mb-3 inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-sm font-semibold bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition"
               >
                 <Paperclip className="w-4 h-4" /> Ver anexos ({modalDetalhe.anexos.length})
+              </button>
+            )}
+            {modalDetalhe.status !== 'PENDENTE' && (
+              <button
+                type="button"
+                onClick={() => pedirReabrir(modalDetalhe)}
+                className="w-full mb-3 inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg text-sm font-semibold bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 transition"
+              >
+                <RotateCcw className="w-4 h-4" /> Reabrir para análise
               </button>
             )}
             <button
