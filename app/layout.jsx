@@ -1,6 +1,8 @@
 import './globals.css';
 import { Toaster } from 'react-hot-toast';
 
+const TEMA_SCRIPT = `(function(){try{var t=localStorage.getItem('sl_tema');var d=t?t==='escuro':window.matchMedia('(prefers-color-scheme: dark)').matches;if(d)document.documentElement.classList.add('dark');}catch(e){}})();`;
+
 const aprovador = process.env.NEXT_PUBLIC_PERFIL === 'aprovador';
 
 export const metadata = {
@@ -17,9 +19,13 @@ export const viewport = {
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="pt-BR">
+    <html lang="pt-BR" suppressHydrationWarning>
+      <head>
+        {/* Aplica o tema salvo antes de desenhar a tela (evita piscar) */}
+        <script dangerouslySetInnerHTML={{ __html: TEMA_SCRIPT }} />
+      </head>
       <body className="page-fade bg-slate-50 text-slate-900 antialiased min-h-screen">
-        <Toaster position="top-center" reverseOrder={false} />
+        <Toaster position="top-center" reverseOrder={false} toastOptions={{ className: 'toast-tema' }} />
         {children}
       </body>
     </html>

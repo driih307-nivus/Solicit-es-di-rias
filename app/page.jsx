@@ -8,7 +8,7 @@ import {
   Clock, CheckCircle2, XCircle, AlertCircle, Plus, Search,
   Download, RefreshCw, UserCheck, Send, MessageSquare, Shield, User,
   Pencil, Trash2, X, CalendarDays,
-  Paperclip, FileText, Music, Image as ImageIcon, ExternalLink, Mic, Square, Eye, Bell, BellOff
+  Paperclip, FileText, Music, Image as ImageIcon, ExternalLink, Mic, Square, Eye, Bell, BellOff, Sun, Moon
 } from 'lucide-react';
 
 const TIPOS_SOLICITACAO = [
@@ -240,6 +240,49 @@ export default function SolicitacoesApp() {
 
   const [motivoRecusaInput, setMotivoRecusaInput] = useState('');
 
+  // ===== Tema claro / escuro =====
+  const [tema, setTema] = useState('claro');
+
+  useEffect(() => {
+    setTema(document.documentElement.classList.contains('dark') ? 'escuro' : 'claro');
+  }, []);
+
+  const alternarTema = () => {
+    const escuro = !document.documentElement.classList.contains('dark');
+    document.documentElement.classList.toggle('dark', escuro);
+    setTema(escuro ? 'escuro' : 'claro');
+    try {
+      localStorage.setItem('sl_tema', escuro ? 'escuro' : 'claro');
+    } catch (e) {}
+  };
+
+  // ===== Pré-visualização ao passar o mouse (observação, cliente, motivo) =====
+  const previaRef = useRef(null);
+  const [previa, setPrevia] = useState(null); // { titulo, texto, x, y }
+
+  const posicionarPrevia = (x, y) => {
+    const el = previaRef.current;
+    if (!el) return;
+    const w = el.offsetWidth;
+    const h = el.offsetHeight;
+    let left = x + 14;
+    let top = y + 18;
+    if (left + w > window.innerWidth - 8) left = Math.max(8, x - w - 14);
+    if (top + h > window.innerHeight - 8) top = Math.max(8, y - h - 14);
+    el.style.left = left + 'px';
+    el.style.top = top + 'px';
+  };
+  const entrarPrevia = (e, titulo, texto) => {
+    if (!texto) return;
+    setPrevia({ titulo, texto, x: e.clientX, y: e.clientY });
+  };
+  const moverPrevia = (e) => posicionarPrevia(e.clientX, e.clientY); // sem re-renderizar a tela
+  const sairPrevia = () => setPrevia(null);
+
+  useEffect(() => {
+    if (previa) posicionarPrevia(previa.x, previa.y);
+  }, [previa]);
+
   // ===== Som de notificação (o mesmo beep de sempre) =====
   const audioCtxRef = useRef(null);
 
@@ -290,13 +333,28 @@ export default function SolicitacoesApp() {
   // ===== Aviso do sistema (canto da tela, como o WhatsApp Web) =====
   const [avisosPerm, setAvisosPerm] = useState('default'); // default | granted | denied | nao-suportado
 
+  const [bannerAvisosFechado, setBannerAvisosFechado] = useState(false);
+
   useEffect(() => {
-    if (typeof window === 'undefined' || !('Notification' in window)) {
+    // No celular o navegador não permite aviso direto da página (só com push): esconde a opção
+    const movel = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    if (!('Notification' in window) || movel) {
       setAvisosPerm('nao-suportado');
-    } else {
-      setAvisosPerm(Notification.permission);
+      return;
     }
+    setAvisosPerm(Notification.permission);
+    try {
+      const adiado = Number(localStorage.getItem('sl_avisos_depois') || 0);
+      if (adiado && Date.now() - adiado < 24 * 60 * 60 * 1000) setBannerAvisosFechado(true);
+    } catch (e) {}
   }, []);
+
+  const adiarAvisos = () => {
+    setBannerAvisosFechado(true);
+    try {
+      localStorage.setItem('sl_avisos_depois', String(Date.now()));
+    } catch (e) {}
+  };
 
   const mostrarAviso = (titulo, corpo, tag) => {
     try {
@@ -1299,6 +1357,16 @@ export default function SolicitacoesApp() {
               </button>
             )}
 
+            <button
+              onClick={alternarTema}
+              title={tema === 'escuro' ? 'Mudar para o tema claro' : 'Mudar para o tema escuro'}
+              aria-label={tema === 'escuro' ? 'Mudar para o tema claro' : 'Mudar para o tema escuro'}
+              className="flex-1 md:flex-none justify-center border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 px-3 py-2.5 md:py-2 rounded-xl text-sm font-medium flex items-center gap-2 transition"
+            >
+              {tema === 'escuro' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+              {tema === 'escuro' ? 'Claro' : 'Escuro'}
+            </button>
+
             {avisosPerm !== 'nao-suportado' && (
               <button
                 onClick={ativarAvisos}
@@ -1551,14 +1619,14 @@ export default function SolicitacoesApp() {
                       style={{ animationDelay: `${Math.min(idx, 12) * 30}ms` }}
                     >
                       <td className={`px-2 py-2.5 font-semibold text-slate-800 truncate border-l-4 ${corDoTipo(item.tipo_solicitacao).borda}`}>{item.cod_liberacao}</td>
-                      <td className="px-2 py-2.5 font-medium text-slate-700 truncate" title={item.nome_cliente}>{item.nome_cliente || <span className="text-slate-300">-</span>}</td>
+                      <td className="px-2 py-2.5 font-medium text-slate-700 truncate" onMouseEnter={(e) => entrarPrevia(e, 'Cliente', item.nome_cliente)} onMouseMove={moverPrevia} onMouseLeave={sairPrevia}>{item.nome_cliente || <span className="text-slate-300">-</span>}</td>
                       <td className="px-2 py-2.5 font-medium text-slate-600 truncate">{item.rca}</td>
                       <td className="px-2 py-2.5">{pilulaTipo(item.tipo_solicitacao)}</td>
                       <td className="px-2 py-2.5 text-center">{badge(item)}</td>
-                      <td className="px-2 py-2.5 truncate text-slate-600" title={item.observacoes}>
+                      <td className="px-2 py-2.5 truncate text-slate-600" onMouseEnter={(e) => entrarPrevia(e, 'Observações', item.observacoes)} onMouseMove={moverPrevia} onMouseLeave={sairPrevia}>
                         {item.observacoes || '-'}
                       </td>
-                      <td className="px-2 py-2.5 truncate text-rose-600 font-medium" title={item.motivo_recusa}>
+                      <td className="px-2 py-2.5 truncate text-rose-600 font-medium" onMouseEnter={(e) => entrarPrevia(e, 'Motivo da recusa', item.motivo_recusa)} onMouseMove={moverPrevia} onMouseLeave={sairPrevia}>
                         {item.motivo_recusa || '-'}
                       </td>
                       <td className="px-2 py-2.5 text-slate-500 whitespace-nowrap">{formatDataCurta(item.data_enviada)}</td>
@@ -2118,6 +2186,49 @@ export default function SolicitacoesApp() {
               Fechar (Esc)
             </button>
           </div>
+        </div>
+      )}
+
+      {/* PEDIDO DE PERMISSÃO DOS AVISOS */}
+      {avisosPerm === 'default' && !bannerAvisosFechado && (
+        <div className="fixed inset-x-0 bottom-4 z-40 flex justify-center px-4 pointer-events-none">
+          <div className="fade-up pointer-events-auto w-full max-w-md bg-white border border-indigo-200 rounded-2xl shadow-xl p-4 flex items-start gap-3">
+            <span className="p-2 bg-indigo-50 text-indigo-600 rounded-lg shrink-0">
+              <Bell className="w-5 h-5" />
+            </span>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-slate-800">Ativar avisos de novidades?</p>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Você será avisado no canto da tela, com som, mesmo quando o app estiver em segundo plano.
+              </p>
+              <div className="flex gap-2 mt-3">
+                <button
+                  onClick={ativarAvisos}
+                  className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white transition"
+                >
+                  Ativar avisos
+                </button>
+                <button
+                  onClick={adiarAvisos}
+                  className="px-3 py-1.5 rounded-lg text-xs font-medium text-slate-600 hover:bg-slate-100 transition"
+                >
+                  Agora não
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* PRÉ-VISUALIZAÇÃO AO PASSAR O MOUSE */}
+      {previa && (
+        <div
+          ref={previaRef}
+          className="fade-in fixed z-[60] max-w-sm bg-slate-900 text-white text-xs rounded-lg shadow-xl border border-slate-600 px-3 py-2 pointer-events-none"
+          style={{ left: previa.x + 14, top: previa.y + 18 }}
+        >
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-indigo-300 mb-1">{previa.titulo}</p>
+          <p className="whitespace-pre-wrap break-words leading-relaxed">{previa.texto}</p>
         </div>
       )}
 
