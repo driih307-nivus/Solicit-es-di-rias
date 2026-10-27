@@ -1399,39 +1399,36 @@ export default function SolicitacoesApp() {
           </div>
         </div>
 
-        {/* ESTATÍSTICAS RÁPIDAS */}
+        {/* ESTATÍSTICAS RÁPIDAS (clique em um cartão para filtrar por status) */}
         <div className="stagger grid grid-cols-2 md:grid-cols-4 gap-3">
-          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
-            <div>
-              <p className="text-xs font-medium text-slate-500">Total do período</p>
-              <p className="text-xl font-bold text-slate-800">{doPeriodo.length}</p>
-            </div>
-            <span className="p-2 bg-slate-100 text-slate-600 rounded-lg"><RefreshCw className="w-4 h-4" /></span>
-          </div>
-
-          <div className="bg-white p-4 rounded-xl border border-amber-200 bg-amber-50/30 shadow-sm flex items-center justify-between">
-            <div>
-              <p className="text-xs font-medium text-amber-700">Pendentes</p>
-              <p className="text-xl font-bold text-amber-800">{doPeriodo.filter(s => s.status === 'PENDENTE').length}</p>
-            </div>
-            <span className="p-2 bg-amber-100 text-amber-600 rounded-lg"><Clock className="w-4 h-4" /></span>
-          </div>
-
-          <div className="bg-white p-4 rounded-xl border border-emerald-200 bg-emerald-50/30 shadow-sm flex items-center justify-between">
-            <div>
-              <p className="text-xs font-medium text-emerald-700">Aprovados (SIM)</p>
-              <p className="text-xl font-bold text-emerald-800">{doPeriodo.filter(s => s.status === 'SIM').length}</p>
-            </div>
-            <span className="p-2 bg-emerald-100 text-emerald-600 rounded-lg"><CheckCircle2 className="w-4 h-4" /></span>
-          </div>
-
-          <div className="bg-white p-4 rounded-xl border border-rose-200 bg-rose-50/30 shadow-sm flex items-center justify-between">
-            <div>
-              <p className="text-xs font-medium text-rose-700">Recusados (NÃO)</p>
-              <p className="text-xl font-bold text-rose-800">{doPeriodo.filter(s => s.status === 'NAO').length}</p>
-            </div>
-            <span className="p-2 bg-rose-100 text-rose-600 rounded-lg"><XCircle className="w-4 h-4" /></span>
-          </div>
+          {[
+            { st: 'TODOS', rotulo: 'Total do período', n: doPeriodo.length, Icone: RefreshCw,
+              card: 'border-slate-200', rot: 'text-slate-500', num: 'text-slate-800', icone: 'bg-slate-100 text-slate-600', ring: 'ring-indigo-500' },
+            { st: 'PENDENTE', rotulo: 'Pendentes', n: doPeriodo.filter((s) => s.status === 'PENDENTE').length, Icone: Clock,
+              card: 'border-amber-200 bg-amber-50/30', rot: 'text-amber-700', num: 'text-amber-800', icone: 'bg-amber-100 text-amber-600', ring: 'ring-amber-400' },
+            { st: 'SIM', rotulo: 'Aprovados (SIM)', n: doPeriodo.filter((s) => s.status === 'SIM').length, Icone: CheckCircle2,
+              card: 'border-emerald-200 bg-emerald-50/30', rot: 'text-emerald-700', num: 'text-emerald-800', icone: 'bg-emerald-100 text-emerald-600', ring: 'ring-emerald-500' },
+            { st: 'NAO', rotulo: 'Recusados (NÃO)', n: doPeriodo.filter((s) => s.status === 'NAO').length, Icone: XCircle,
+              card: 'border-rose-200 bg-rose-50/30', rot: 'text-rose-700', num: 'text-rose-800', icone: 'bg-rose-100 text-rose-600', ring: 'ring-rose-400' }
+          ].map(({ st, rotulo, n, Icone, card, rot, num, icone, ring }) => {
+            const ativo = st !== 'TODOS' && filtroStatus === st;
+            return (
+              <button
+                key={st}
+                type="button"
+                onClick={() => setFiltroStatus(ativo ? 'TODOS' : st)}
+                aria-pressed={ativo}
+                title={st === 'TODOS' ? 'Mostrar todos os status' : ativo ? 'Clique para remover o filtro' : `Filtrar: ${rotulo}`}
+                className={`bg-white p-4 rounded-xl border ${card} shadow-sm flex items-center justify-between w-full text-left transition hover:shadow-md ${ativo ? `ring-2 ${ring}` : ''}`}
+              >
+                <div>
+                  <p className={`text-xs font-medium ${rot}`}>{rotulo}</p>
+                  <p className={`text-xl font-bold ${num}`}>{n}</p>
+                </div>
+                <span className={`p-2 rounded-lg ${icone}`}><Icone className="w-4 h-4" /></span>
+              </button>
+            );
+          })}
         </div>
 
         {/* PENDENTES DE DIAS ANTERIORES */}
