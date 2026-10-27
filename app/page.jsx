@@ -46,6 +46,7 @@ const diaDeHoje = () => paraDataLocal(new Date());
 const formatarDia = (d) => (d ? d.split('-').reverse().join('/') : '');
 
 const LIMITE_LINHAS = 1000;
+const CODIGO_DIGITOS = 6; // código do cliente: exatamente 6 dígitos
 
 // ===== Anexos (Supabase Storage) =====
 const BUCKET = 'anexos';
@@ -101,10 +102,91 @@ const formatarTempo = (seg) =>
 
 const formVazio = () => ({
   cod_liberacao: '',
+  nome_cliente: '',
   rca: '',
   tipo_solicitacao: TIPOS_SOLICITACAO[0],
   observacoes: ''
 });
+
+const TONS = {
+  indigo: { icone: 'bg-indigo-50 text-indigo-600', botao: 'bg-indigo-600 hover:bg-indigo-700' },
+  emerald: { icone: 'bg-emerald-50 text-emerald-600', botao: 'bg-emerald-600 hover:bg-emerald-700' },
+  rose: { icone: 'bg-rose-50 text-rose-600', botao: 'bg-rose-600 hover:bg-rose-700' }
+};
+
+// Pop-up de confirmação com fade (entra e sai suavemente)
+function ConfirmarModal({ cfg, onClose }) {
+  const [saindo, setSaindo] = useState(false);
+  const feito = useRef(false);
+  const tom = TONS[cfg.tom] || TONS.indigo;
+
+  const fechar = (confirmou) => {
+    if (feito.current) return;
+    feito.current = true;
+    setSaindo(true);
+    setTimeout(() => {
+      onClose();
+      if (confirmou) cfg.onConfirm();
+    }, 200);
+  };
+
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') fechar(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      className={`fixed inset-0 bg-slate-900/50 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 z-[80] ${saindo ? 'fade-out' : 'fade-in'}`}
+      onClick={() => fechar(false)}
+    >
+      <div
+        className={`bg-white rounded-t-2xl sm:rounded-2xl max-w-sm w-full p-5 sm:p-6 shadow-xl border border-slate-200 max-h-[92vh] overflow-y-auto pb-[calc(1.25rem+env(safe-area-inset-bottom))] ${saindo ? 'sheet-out' : 'sheet-in'}`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start gap-3">
+          <span className={`p-2.5 rounded-xl shrink-0 ${tom.icone}`}>{cfg.icone}</span>
+          <div className="min-w-0">
+            <h2 className="text-lg font-bold text-slate-800">{cfg.titulo}</h2>
+            {cfg.mensagem && <p className="text-sm text-slate-600 mt-1">{cfg.mensagem}</p>}
+          </div>
+        </div>
+
+        {cfg.detalhes?.length > 0 && (
+          <dl className="mt-4 bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-1.5 text-sm">
+            {cfg.detalhes.map(([rotulo, valor]) => (
+              <div key={rotulo} className="flex justify-between gap-3">
+                <dt className="text-slate-500 shrink-0">{rotulo}</dt>
+                <dd className="font-semibold text-slate-800 text-right break-words min-w-0">{valor || '-'}</dd>
+              </div>
+            ))}
+          </dl>
+        )}
+
+        <div className="grid grid-cols-2 gap-3 pt-5">
+          <button
+            type="button"
+            onClick={() => fechar(false)}
+            className="px-4 py-2.5 text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl text-sm font-semibold transition"
+          >
+            Voltar
+          </button>
+          <button
+            type="button"
+            autoFocus
+            onClick={() => fechar(true)}
+            className={`px-4 py-2.5 text-white rounded-xl text-sm font-semibold shadow-sm transition ${tom.botao}`}
+          >
+            {cfg.textoConfirmar || 'Confirmar'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export default function SolicitacoesApp() {
   const [solicitacoes, setSolicitacoes] = useState([]);
@@ -123,8 +205,9 @@ export default function SolicitacoesApp() {
   const [dataInicio, setDataInicio] = useState('');
   const [dataFim, setDataFim] = useState('');
   const [editandoId, setEditandoId] = useState(null);
-  const [modalExcluir, setModalExcluir] = useState(null);
-  const [excluindo, setExcluindo] = useState(false);
+  const [confirmacao, setConfirmacao] = useState(null);      // pop-up de confirmação
+  const [nomeStatus, setNomeStatus] = useState('idle');        // idle | buscando | encontrado | nao_encontrado | erro
+  const nomeAutoRef = useRef(false);                           // nome veio da lista (preenchido sozinho)
   const [enviando, setEnviando] = useState(false);
   const [anexosExistentes, setAnexosExistentes] = useState([]); // já salvos (edição)
   const [anexosRemovidos, setAnexosRemovidos] = useState([]);   // marcados para remover ao salvar
@@ -140,12 +223,7 @@ export default function SolicitacoesApp() {
   const timerRef = useRef(null);
   const descartarRef = useRef(false);
 
-  const [form, setForm] = useState({
-    cod_liberacao: '',
-    rca: '',
-    tipo_solicitacao: TIPOS_SOLICITACAO[0],
-    observacoes: ''
-  });
+  const [form, setForm] = useState(formVazio());
 
   const [motivoRecusaInput, setMotivoRecusaInput] = useState('');
 
@@ -292,9 +370,55 @@ export default function SolicitacoesApp() {
     };
   }, []);
 
+  // Preenche o nome do cliente sozinho quando o código chega a 6 dígitos
+  useEffect(() => {
+    if (!modalAberto) return;
+    const cod = form.cod_liberacao;
+
+    if (cod.length !== CODIGO_DIGITOS) {
+      if (nomeAutoRef.current) {
+        nomeAutoRef.current = false;
+        setForm((f) => ({ ...f, nome_cliente: '' }));
+      }
+      setNomeStatus('idle');
+      return;
+    }
+
+    let cancelado = false;
+    setNomeStatus('buscando');
+    supabase
+      .from('clientes')
+      .select('nome')
+      .eq('codigo', cod)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (cancelado) return;
+        if (error) {
+          setNomeStatus('erro');
+          return;
+        }
+        if (data?.nome) {
+          nomeAutoRef.current = true;
+          setForm((f) => ({ ...f, nome_cliente: data.nome.trim() }));
+          setNomeStatus('encontrado');
+        } else {
+          if (nomeAutoRef.current) {
+            nomeAutoRef.current = false;
+            setForm((f) => ({ ...f, nome_cliente: '' }));
+          }
+          setNomeStatus('nao_encontrado');
+        }
+      });
+    return () => { cancelado = true; };
+  }, [modalAberto, form.cod_liberacao]);
+
+  const pedirConfirmacao = (cfg) => setConfirmacao(cfg);
+
   // Abrir modal para uma nova solicitação
   const abrirNova = () => {
     setEditandoId(null);
+    nomeAutoRef.current = false;
+    setNomeStatus('idle');
     setForm(formVazio());
     limparAnexosForm();
     setModalAberto(true);
@@ -303,8 +427,11 @@ export default function SolicitacoesApp() {
   // Abrir modal para editar uma solicitação existente
   const abrirEdicao = (item) => {
     setEditandoId(item.id);
+    nomeAutoRef.current = false;
+    setNomeStatus('idle');
     setForm({
       cod_liberacao: item.cod_liberacao || '',
+      nome_cliente: item.nome_cliente || '',
       rca: item.rca || '',
       tipo_solicitacao: item.tipo_solicitacao || TIPOS_SOLICITACAO[0],
       observacoes: item.observacoes || ''
@@ -584,8 +711,8 @@ export default function SolicitacoesApp() {
   // Aprovador altera qualquer solicitação; solicitante só enquanto estiver pendente
   const podeAlterar = (item) => perfil === 'APROVADOR' || item.status === 'PENDENTE';
 
-  // Criar ou salvar edição (com anexos)
-  const handleSubmit = async (e) => {
+  // Valida o formulário e pede confirmação antes de enviar/salvar
+  const handleSubmit = (e) => {
     e.preventDefault();
     if (enviando) return;
     if (gravando) {
@@ -594,11 +721,42 @@ export default function SolicitacoesApp() {
     }
     const cod = form.cod_liberacao.trim();
     const rca = form.rca.trim();
-    if (!cod || !rca) {
+    const nome = form.nome_cliente.trim();
+    if (!/^\d{6}$/.test(cod)) {
+      toast.error(`O código do cliente deve ter exatamente ${CODIGO_DIGITOS} dígitos.`);
+      return;
+    }
+    if (!nome) {
+      toast.error('Informe o nome do cliente.');
+      return;
+    }
+    if (!rca) {
       toast.error('Preencha os campos obrigatórios!');
       return;
     }
 
+    const qtdAnexos = anexosExistentes.length + novosArquivos.length;
+    pedirConfirmacao({
+      titulo: editandoId ? 'Salvar alterações?' : 'Enviar solicitação?',
+      mensagem: editandoId
+        ? 'Os dados atuais desta solicitação serão substituídos.'
+        : 'A solicitação será enviada ao aprovador.',
+      icone: editandoId ? <Pencil className="w-5 h-5" /> : <Send className="w-5 h-5" />,
+      tom: 'indigo',
+      textoConfirmar: editandoId ? 'Salvar' : 'Enviar',
+      detalhes: [
+        ['Cód. cliente', cod],
+        ['Cliente', nome],
+        ['RCA', rca],
+        ['Tipo', form.tipo_solicitacao],
+        ['Anexos', String(qtdAnexos)]
+      ],
+      onConfirm: () => enviarSolicitacao(cod, rca, nome)
+    });
+  };
+
+  // Criar ou salvar edição (com anexos)
+  const enviarSolicitacao = async (cod, rca, nome) => {
     setEnviando(true);
     const toastId = toast.loading(
       novosArquivos.length ? 'Enviando anexos...' : editandoId ? 'Salvando alterações...' : 'Enviando solicitação...'
@@ -620,6 +778,7 @@ export default function SolicitacoesApp() {
         .from('solicitacoes')
         .update({
           cod_liberacao: cod,
+          nome_cliente: nome,
           rca,
           tipo_solicitacao: form.tipo_solicitacao,
           observacoes: form.observacoes,
@@ -648,6 +807,7 @@ export default function SolicitacoesApp() {
     const { error } = await supabase.from('solicitacoes').insert([
       {
         cod_liberacao: cod,
+        nome_cliente: nome,
         rca,
         tipo_solicitacao: form.tipo_solicitacao,
         observacoes: form.observacoes,
@@ -669,31 +829,43 @@ export default function SolicitacoesApp() {
   };
 
   // Excluir solicitação (e os anexos dela)
-  const handleExcluir = async () => {
-    if (!modalExcluir) return;
-    setExcluindo(true);
+  const pedirExcluir = (item) =>
+    pedirConfirmacao({
+      titulo: 'Excluir solicitação?',
+      mensagem: 'Ela será removida permanentemente. Essa ação não pode ser desfeita.',
+      icone: <Trash2 className="w-5 h-5" />,
+      tom: 'rose',
+      textoConfirmar: 'Excluir',
+      detalhes: [
+        ['Cód. cliente', item.cod_liberacao],
+        ['Cliente', item.nome_cliente],
+        ['RCA', item.rca],
+        ['Tipo', item.tipo_solicitacao]
+      ],
+      onConfirm: () => handleExcluir(item)
+    });
+
+  const handleExcluir = async (item) => {
     const toastId = toast.loading('Excluindo solicitação...');
     const { data, error } = await supabase
       .from('solicitacoes')
       .delete()
-      .eq('id', modalExcluir.id)
+      .eq('id', item.id)
       .select();
-    setExcluindo(false);
 
     if (error) {
       toast.error('Erro ao excluir: ' + error.message, { id: toastId });
     } else if (!data || data.length === 0) {
       toast.error('Não foi possível excluir. Verifique a permissão de DELETE (RLS) da tabela.', { id: toastId });
     } else {
-      await removerArquivos((modalExcluir.anexos || []).map((a) => a.path));
-      setSolicitacoes((prev) => prev.filter((item) => item.id !== modalExcluir.id));
+      await removerArquivos((item.anexos || []).map((a) => a.path));
+      setSolicitacoes((prev) => prev.filter((x) => x.id !== item.id));
       toast.success('Solicitação excluída.', { id: toastId });
-      setModalExcluir(null);
     }
   };
 
   // Processar Aprovação/Recusa
-  const handleAprovarRecusar = async (statusAprovado) => {
+  const handleAprovarRecusar = (statusAprovado) => {
     if (!modalAprovacao) return;
 
     if (!statusAprovado && !motivoRecusaInput.trim()) {
@@ -701,6 +873,25 @@ export default function SolicitacoesApp() {
       return;
     }
 
+    pedirConfirmacao({
+      titulo: statusAprovado ? 'Aprovar solicitação?' : 'Recusar solicitação?',
+      mensagem: statusAprovado
+        ? 'O solicitante receberá a resposta SIM.'
+        : 'O solicitante receberá a resposta NÃO com o motivo informado.',
+      icone: statusAprovado ? <CheckCircle2 className="w-5 h-5" /> : <XCircle className="w-5 h-5" />,
+      tom: statusAprovado ? 'emerald' : 'rose',
+      textoConfirmar: statusAprovado ? 'Aprovar (SIM)' : 'Recusar (NÃO)',
+      detalhes: [
+        ['Cód. cliente', modalAprovacao.cod_liberacao],
+        ['Cliente', modalAprovacao.nome_cliente],
+        ['RCA', modalAprovacao.rca],
+        ...(statusAprovado ? [] : [['Motivo', motivoRecusaInput.trim()]])
+      ],
+      onConfirm: () => executarAprovacao(statusAprovado)
+    });
+  };
+
+  const executarAprovacao = async (statusAprovado) => {
     const toastId = toast.loading('Processando resposta...');
     const { error } = await supabase
       .from('solicitacoes')
@@ -747,9 +938,10 @@ export default function SolicitacoesApp() {
 
   // Exportar para CSV
   const exportToCSV = () => {
-    const headers = ['Cód. Liberação', 'RCA', 'Tipo de Solicitação', 'Aprovado (SIM/NÃO)', 'Observações', 'Motivo Recusa', 'Data Enviada', 'Data Finalizada', 'Tempo Conclusão', 'Qtd. Anexos'];
+    const headers = ['Cód. Cliente', 'Cliente', 'RCA', 'Tipo de Solicitação', 'Aprovado (SIM/NÃO)', 'Observações', 'Motivo Recusa', 'Data Enviada', 'Data Finalizada', 'Tempo Conclusão', 'Qtd. Anexos'];
     const rows = solicitacoesFiltradas.map(s => [
       s.cod_liberacao,
+      `"${(s.nome_cliente || '').replace(/"/g, '""')}"`,
       s.rca,
       `"${s.tipo_solicitacao}"`,
       s.status,
@@ -801,6 +993,7 @@ export default function SolicitacoesApp() {
       const alvo = normalizar(
         [
           item.cod_liberacao,
+          item.nome_cliente,
           item.rca,
           item.tipo_solicitacao,
           item.observacoes,
@@ -919,7 +1112,7 @@ export default function SolicitacoesApp() {
               <Pencil className={ic} />
             </button>
             <button
-              onClick={() => setModalExcluir(item)}
+              onClick={() => pedirExcluir(item)}
               title="Excluir"
               aria-label="Excluir solicitação"
               className={`${pad} rounded-lg text-slate-500 hover:text-rose-600 hover:bg-rose-50 transition`}
@@ -1030,7 +1223,7 @@ export default function SolicitacoesApp() {
               <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
                 type="text"
-                placeholder="Buscar por cód., RCA, tipo, observação, motivo..."
+                placeholder="Buscar por cliente, cód., RCA, tipo, observação..."
                 value={busca}
                 onChange={(e) => setBusca(e.target.value)}
                 className="w-full pl-9 pr-9 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
@@ -1047,7 +1240,7 @@ export default function SolicitacoesApp() {
               )}
             </div>
 
-            <div className="flex items-center gap-2 w-full md:w-auto overflow-x-auto">
+            <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
               {['TODOS', 'PENDENTE', 'SIM', 'NAO'].map((st) => (
                 <button
                   key={st}
@@ -1086,7 +1279,7 @@ export default function SolicitacoesApp() {
               />
             </div>
 
-            <div className="flex items-center gap-2 w-full sm:w-auto overflow-x-auto pb-0.5">
+            <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
               {[
                 { label: 'Hoje', dias: 1 },
                 { label: '7 dias', dias: 7 },
@@ -1142,11 +1335,12 @@ export default function SolicitacoesApp() {
             </div>
           ) : (
             <>
-            <div className="overflow-x-auto hidden md:block">
+            <div className="overflow-x-auto hidden xl:block">
               <table className="w-full text-left border-collapse text-xs sm:text-sm">
                 <thead>
                   <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold uppercase tracking-wider">
-                    <th className="p-3">Cód. P / Liberação</th>
+                    <th className="p-3">Cód. Cliente</th>
+                    <th className="p-3">Cliente</th>
                     <th className="p-3">RCA</th>
                     <th className="p-3">Tipo de Solicitação</th>
                     <th className="p-3 text-center">Status (SIM/NÃO)</th>
@@ -1163,6 +1357,7 @@ export default function SolicitacoesApp() {
                   {solicitacoesFiltradas.map((item, idx) => (
                     <tr key={item.id} className="fade-in hover:bg-slate-50/80 transition" style={{ animationDelay: `${Math.min(idx, 12) * 30}ms` }}>
                       <td className="p-3 font-semibold text-slate-800">{item.cod_liberacao}</td>
+                      <td className="p-3 font-medium text-slate-700 max-w-[14rem] truncate" title={item.nome_cliente}>{item.nome_cliente || <span className="text-slate-300">-</span>}</td>
                       <td className="p-3 font-medium text-slate-600">{item.rca}</td>
                       <td className="p-3">{item.tipo_solicitacao}</td>
                       <td className="p-3 text-center">
@@ -1199,29 +1394,36 @@ export default function SolicitacoesApp() {
               </table>
             </div>
 
-            {/* LISTA EM CARTÕES (CELULAR) */}
-            <div className="md:hidden divide-y divide-slate-100">
+            {/* LISTA EM CARTÕES (CELULAR E TABLET) — sem rolagem lateral */}
+            <div className="xl:hidden grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 p-3">
               {solicitacoesFiltradas.map((item, idx) => (
                 <div
                   key={item.id}
-                  className="fade-in p-4 space-y-2"
+                  className="fade-in min-w-0 flex flex-col gap-3 bg-white border border-slate-200 rounded-2xl p-4 shadow-sm"
                   style={{ animationDelay: `${Math.min(idx, 10) * 30}ms` }}
                 >
                   <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <p className="font-bold text-slate-800">#{item.cod_liberacao}</p>
-                      <p className="text-xs text-slate-500">RCA {item.rca}</p>
+                    <div className="min-w-0">
+                      <p className={`font-bold break-words ${item.nome_cliente ? 'text-slate-800' : 'text-slate-400 italic font-medium'}`}>
+                        {item.nome_cliente || 'Cliente não informado'}
+                      </p>
+                      <p className="text-xs text-slate-500 mt-0.5">Cód. {item.cod_liberacao} · RCA {item.rca}</p>
                     </div>
                     {badge(item)}
                   </div>
-                  <p className="text-sm text-slate-700">{item.tipo_solicitacao}</p>
+
+                  <p className="text-sm font-medium text-indigo-700 bg-indigo-50 rounded-lg px-2.5 py-1.5 break-words">
+                    {item.tipo_solicitacao}
+                  </p>
+
                   {item.observacoes && (
-                    <p className="text-xs text-slate-600 bg-slate-50 rounded-lg p-2 break-words">{item.observacoes}</p>
+                    <p className="text-xs text-slate-600 bg-slate-50 rounded-lg p-2.5 break-words">{item.observacoes}</p>
                   )}
                   {item.motivo_recusa && (
                     <p className="text-xs text-rose-600 font-medium break-words">Motivo: {item.motivo_recusa}</p>
                   )}
                   {(item.anexos || []).length > 0 && <div>{chipAnexos(item)}</div>}
+
                   <div className="text-[11px] text-slate-500 space-y-0.5">
                     <p>Enviada: {formatDateTime(item.data_enviada)}</p>
                     {item.data_finalizada && (
@@ -1233,7 +1435,10 @@ export default function SolicitacoesApp() {
                       </p>
                     )}
                   </div>
-                  <div className="flex items-center justify-end gap-2 pt-1">{acoesItem(item, true)}</div>
+
+                  <div className="mt-auto flex flex-wrap items-center justify-end gap-2 pt-3 border-t border-slate-100">
+                    {acoesItem(item, true)}
+                  </div>
                 </div>
               ))}
             </div>
@@ -1387,15 +1592,67 @@ export default function SolicitacoesApp() {
 
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Cód. P / Liberação *</label>
+                <div className="flex items-center justify-between mb-1">
+                  <label htmlFor="cod-cliente" className="block text-xs font-semibold text-slate-600">Código do cliente (6 dígitos) *</label>
+                  <span className={`text-[11px] tabular-nums ${form.cod_liberacao.length === CODIGO_DIGITOS ? 'text-emerald-600' : 'text-slate-400'}`}>
+                    {form.cod_liberacao.length}/{CODIGO_DIGITOS}
+                  </span>
+                </div>
                 <input
+                  id="cod-cliente"
                   type="text"
+                  inputMode="numeric"
+                  autoComplete="off"
                   required
+                  maxLength={CODIGO_DIGITOS}
+                  pattern={`[0-9]{${CODIGO_DIGITOS}}`}
+                  title={`O código do cliente deve ter ${CODIGO_DIGITOS} dígitos`}
                   placeholder="Ex: 541532"
                   value={form.cod_liberacao}
-                  onChange={(e) => setForm({ ...form, cod_liberacao: e.target.value })}
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                  onChange={(e) =>
+                    setForm({ ...form, cod_liberacao: e.target.value.replace(/\D/g, '').slice(0, CODIGO_DIGITOS) })
+                  }
+                  className={`w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:outline-none ${
+                    form.cod_liberacao.length > 0 && form.cod_liberacao.length < CODIGO_DIGITOS
+                      ? 'border-amber-400 focus:ring-amber-400'
+                      : 'border-slate-300 focus:ring-indigo-500'
+                  }`}
                 />
+                {form.cod_liberacao.length > 0 && form.cod_liberacao.length < CODIGO_DIGITOS && (
+                  <p className="fade-in text-[11px] text-amber-600 mt-1">
+                    Faltam {CODIGO_DIGITOS - form.cod_liberacao.length} dígito(s).
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <label htmlFor="nome-cliente" className="block text-xs font-semibold text-slate-600 mb-1">Nome do cliente *</label>
+                <input
+                  id="nome-cliente"
+                  type="text"
+                  required
+                  autoComplete="off"
+                  placeholder={nomeStatus === 'buscando' ? 'Buscando...' : 'Preenchido ao digitar o código'}
+                  value={form.nome_cliente}
+                  onChange={(e) => {
+                    nomeAutoRef.current = false;
+                    setForm({ ...form, nome_cliente: e.target.value });
+                  }}
+                  className={`w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:outline-none transition-colors ${
+                    nomeStatus === 'encontrado'
+                      ? 'border-emerald-300 bg-emerald-50/50 focus:ring-emerald-500'
+                      : 'border-slate-300 focus:ring-indigo-500'
+                  }`}
+                />
+                {nomeStatus === 'encontrado' && (
+                  <p className="fade-in text-[11px] text-emerald-600 mt-1">Cliente encontrado na lista.</p>
+                )}
+                {nomeStatus === 'nao_encontrado' && (
+                  <p className="fade-in text-[11px] text-amber-600 mt-1">Código não encontrado na lista. Digite o nome do cliente.</p>
+                )}
+                {nomeStatus === 'erro' && (
+                  <p className="fade-in text-[11px] text-amber-600 mt-1">Não foi possível consultar a lista. Digite o nome do cliente.</p>
+                )}
               </div>
 
               <div>
@@ -1565,7 +1822,10 @@ export default function SolicitacoesApp() {
       {modalAprovacao && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 z-50 fade-in">
           <div className="bg-white rounded-t-2xl sm:rounded-2xl max-w-md w-full p-5 sm:p-6 shadow-xl border border-slate-200 max-h-[92vh] overflow-y-auto sheet-in pb-[calc(1.25rem+env(safe-area-inset-bottom))]">
-            <h2 className="text-lg font-bold text-slate-800 mb-2">Avaliar Solicitação #{modalAprovacao.cod_liberacao}</h2>
+            <h2 className="text-lg font-bold text-slate-800 mb-1">Avaliar Solicitação #{modalAprovacao.cod_liberacao}</h2>
+            {modalAprovacao.nome_cliente && (
+              <p className="text-sm font-semibold text-slate-700 mb-1 break-words">{modalAprovacao.nome_cliente}</p>
+            )}
             <p className="text-xs text-slate-500 mb-4">RCA: {modalAprovacao.rca} | Tipo: {modalAprovacao.tipo_solicitacao}</p>
 
             {modalAprovacao.observacoes && (
@@ -1624,36 +1884,8 @@ export default function SolicitacoesApp() {
         </div>
       )}
 
-      {/* MODAL: CONFIRMAR EXCLUSÃO */}
-      {modalExcluir && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 z-50 fade-in">
-          <div className="bg-white rounded-t-2xl sm:rounded-2xl max-w-sm w-full p-5 sm:p-6 shadow-xl border border-slate-200 max-h-[92vh] overflow-y-auto sheet-in pb-[calc(1.25rem+env(safe-area-inset-bottom))]">
-            <h2 className="text-lg font-bold text-slate-800 mb-2 flex items-center gap-2">
-              <Trash2 className="w-5 h-5 text-rose-600" /> Excluir solicitação?
-            </h2>
-            <p className="text-sm text-slate-600">
-              A solicitação <strong>#{modalExcluir.cod_liberacao}</strong> (RCA {modalExcluir.rca} — {modalExcluir.tipo_solicitacao}) será removida
-              permanentemente. Essa ação não pode ser desfeita.
-            </p>
-            <div className="flex justify-end gap-2 pt-5">
-              <button
-                onClick={() => setModalExcluir(null)}
-                disabled={excluindo}
-                className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg text-sm font-medium disabled:opacity-50"
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={handleExcluir}
-                disabled={excluindo}
-                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-sm font-semibold shadow-sm disabled:opacity-50"
-              >
-                {excluindo ? 'Excluindo...' : 'Excluir'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* POP-UP DE CONFIRMAÇÃO (com fade) */}
+      {confirmacao && <ConfirmarModal cfg={confirmacao} onClose={() => setConfirmacao(null)} />}
     </div>
   );
 }
