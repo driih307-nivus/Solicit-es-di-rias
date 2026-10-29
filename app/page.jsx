@@ -240,6 +240,8 @@ export default function SolicitacoesApp() {
   const [dataFim, setDataFim] = useState('');
   const [editandoId, setEditandoId] = useState(null);
   const [confirmacao, setConfirmacao] = useState(null);      // pop-up de confirmação
+  const [selecionados, setSelecionados] = useState(() => new Set()); // ids marcados para excluir em lote
+  const [excluindoLote, setExcluindoLote] = useState(false);
   const [nomeStatus, setNomeStatus] = useState('idle');        // idle | buscando | encontrado | nao_encontrado | erro
   const nomeAutoRef = useRef(false);                           // nome veio da lista (preenchido sozinho)
   const [enviando, setEnviando] = useState(false);
@@ -1297,6 +1299,88 @@ export default function SolicitacoesApp() {
     }).sort((a, b) => ultimaMovimentacao(b) - ultimaMovimentacao(a)); // reabertos no topo
   }, [solicitacoes, filtroStatus, busca, dataInicio, dataFim]);
 
+  // Seleção em lote: só entram as que o perfil pode alterar e que estão na tela (filtro, data e busca)
+  const selecionaveis = useMemo(
+    () => solicitacoesFiltradas.filter((i) => perfil === 'APROVADOR' || i.status === 'PENDENTE'),
+    [solicitacoesFiltradas, perfil]
+  );
+  const idsSelecionaveis = useMemo(() => new Set(selecionaveis.map((i) => i.id)), [selecionaveis]);
+
+  // Ao mudar filtro, busca ou período, desmarca o que saiu da tela
+  useEffect(() => {
+    setSelecionados((prev) => {
+      const prox = new Set([...prev].filter((id) => idsSelecionaveis.has(id)));
+      return prox.size === prev.size ? prev : prox;
+    });
+  }, [idsSelecionaveis]);
+
+  const qtdSel = selecionados.size;
+  const todosMarcados = selecionaveis.length > 0 && qtdSel === selecionaveis.length;
+  const algunsMarcados = qtdSel > 0 && !todosMarcados;
+  const refMarcarTodos = useRef(null);
+  const refMarcarTodosTopo = useRef(null);
+  useEffect(() => {
+    [refMarcarTodos, refMarcarTodosTopo].forEach((r) => { if (r.current) r.current.indeterminate = algunsMarcados; });
+  }, [algunsMarcados, qtdSel, selecionaveis.length]);
+
+  const alternarSelecao = (id) =>
+    setSelecionados((prev) => {
+      const prox = new Set(prev);
+      if (prox.has(id)) prox.delete(id); else prox.add(id);
+      return prox;
+    });
+
+  const alternarTodos = () =>
+    setSelecionados(todosMarcados ? new Set() : new Set(selecionaveis.map((i) => i.id)));
+
+  const limparSelecao = () => setSelecionados(new Set());
+
+  const pedirExcluirSelecionadas = () => {
+    const itens = solicitacoes.filter((i) => selecionados.has(i.id));
+    if (!itens.length) return;
+    const nAnexos = itens.reduce((t, i) => t + (i.anexos || []).length, 0);
+    const nomes = itens.slice(0, 3).map((i) => i.nome_cliente || i.cod_liberacao).join(', ') + (itens.length > 3 ? ` +${itens.length - 3}` : '');
+    pedirConfirmacao({
+      titulo: itens.length === 1 ? 'Excluir 1 solicitação?' : `Excluir ${itens.length} solicitações?`,
+      mensagem: 'Elas serão removidas permanentemente, junto com os anexos. Essa ação não pode ser desfeita.',
+      icone: <Trash2 className="w-5 h-5" />,
+      tom: 'rose',
+      textoConfirmar: itens.length === 1 ? 'Excluir' : `Excluir ${itens.length}`,
+      detalhes: [
+        ['Solicitações', String(itens.length)],
+        ['Anexos', String(nAnexos)],
+        ['Clientes', nomes]
+      ],
+      onConfirm: () => handleExcluirSelecionadas(itens)
+    });
+  };
+
+  const handleExcluirSelecionadas = async (itens) => {
+    setExcluindoLote(true);
+    const toastId = toast.loading(`Excluindo ${itens.length} solicitação(ões)...`);
+    const apagados = new Set();
+    let erro = null;
+    try {
+      for (let k = 0; k < itens.length; k += 100) {
+        const lote = itens.slice(k, k + 100).map((i) => i.id);
+        const { data, error } = await supabase.from('solicitacoes').delete().in('id', lote).select('id');
+        if (error) { erro = error.message; break; }
+        (data || []).forEach((r) => apagados.add(r.id));
+      }
+      if (apagados.size) {
+        await removerArquivos(itens.filter((i) => apagados.has(i.id)).flatMap((i) => (i.anexos || []).map((a) => a.path)));
+        setSolicitacoes((prev) => prev.filter((x) => !apagados.has(x.id)));
+        setSelecionados((prev) => new Set([...prev].filter((id) => !apagados.has(id))));
+      }
+      if (erro) toast.error(`Erro ao excluir: ${erro}${apagados.size ? ` (${apagados.size} já excluída(s))` : ''}`, { id: toastId });
+      else if (!apagados.size) toast.error('Não foi possível excluir. Verifique a permissão de DELETE (RLS) da tabela.', { id: toastId });
+      else if (apagados.size < itens.length) toast.error(`${apagados.size} de ${itens.length} excluídas. As outras não foram permitidas pelo banco.`, { id: toastId });
+      else toast.success(apagados.size === 1 ? 'Solicitação excluída.' : `${apagados.size} solicitações excluídas.`, { id: toastId });
+    } finally {
+      setExcluindoLote(false);
+    }
+  };
+
   const visaoPadrao = seguindoHoje && dataInicio === hoje && dataFim === hoje;
   const temFiltroAtivo = Boolean(busca || filtroStatus !== 'TODOS' || !visaoPadrao);
 
@@ -1719,15 +1803,57 @@ export default function SolicitacoesApp() {
               ))}
             </div>
 
+            {/* SELEÇÃO EM LOTE */}
+            {selecionaveis.length > 0 && (
+              <div className={`flex flex-wrap items-center gap-2 sm:gap-3 px-3 sm:px-4 py-2.5 border-b border-slate-200 text-xs transition-colors ${qtdSel ? 'bg-rose-50/70' : 'bg-slate-50/60'}`}>
+                <label className="inline-flex items-center gap-2 font-semibold text-slate-700 cursor-pointer select-none min-h-[36px]">
+                  <input
+                    ref={refMarcarTodosTopo}
+                    type="checkbox"
+                    checked={todosMarcados}
+                    onChange={alternarTodos}
+                    className="w-4 h-4 accent-indigo-600 cursor-pointer"
+                  />
+                  {todosMarcados ? 'Desmarcar todas' : `Marcar todas (${selecionaveis.length})`}
+                </label>
+                {qtdSel > 0 && (
+                  <span className="fade-in text-slate-600">
+                    <b className="text-slate-800">{qtdSel}</b> selecionada{qtdSel > 1 ? 's' : ''}
+                  </span>
+                )}
+                {qtdSel > 0 && (
+                  <div className="fade-in flex items-center gap-2 ml-auto">
+                    <button
+                      type="button"
+                      onClick={limparSelecao}
+                      className="px-3 py-2 rounded-lg font-semibold text-slate-600 hover:bg-slate-200/70 transition"
+                    >
+                      Limpar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={pedirExcluirSelecionadas}
+                      disabled={excluindoLote}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg font-semibold text-white bg-rose-600 hover:bg-rose-700 disabled:opacity-60 transition shadow-sm"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      Excluir selecionadas ({qtdSel})
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="hidden xl:block">
               <table className="w-full table-fixed text-left border-collapse text-xs">
                 <colgroup>
+                  <col style={{ width: '3%' }} />
                   <col style={{ width: '6%' }} />
-                  <col style={{ width: '11%' }} />
+                  <col style={{ width: '10%' }} />
                   <col style={{ width: '5%' }} />
                   <col style={{ width: '14%' }} />
                   <col style={{ width: '8%' }} />
-                  <col style={{ width: '12%' }} />
+                  <col style={{ width: '10%' }} />
                   <col style={{ width: '9%' }} />
                   <col style={{ width: '8%' }} />
                   <col style={{ width: '8%' }} />
@@ -1737,6 +1863,18 @@ export default function SolicitacoesApp() {
                 </colgroup>
                 <thead>
                   <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold uppercase text-[11px] leading-tight">
+                    <th className="pl-3 pr-1 py-2.5">
+                      <input
+                        ref={refMarcarTodos}
+                        type="checkbox"
+                        checked={todosMarcados}
+                        onChange={alternarTodos}
+                        disabled={selecionaveis.length === 0}
+                        aria-label="Marcar todas as solicitações da lista"
+                        title="Marcar todas"
+                        className="w-4 h-4 accent-indigo-600 cursor-pointer align-middle"
+                      />
+                    </th>
                     <th className="px-2 py-2.5">Cód.</th>
                     <th className="px-2 py-2.5">Cliente</th>
                     <th className="px-2 py-2.5">RCA</th>
@@ -1756,10 +1894,21 @@ export default function SolicitacoesApp() {
                     <tr
                       key={item.id}
                       onClick={(e) => abrirItem(item, e)}
-                      className="fade-in cursor-pointer hover:bg-indigo-50/40 transition"
+                      className={`fade-in cursor-pointer transition ${selecionados.has(item.id) ? 'bg-rose-50/70 hover:bg-rose-50' : 'hover:bg-indigo-50/40'}`}
                       style={{ animationDelay: `${Math.min(idx, 12) * 30}ms` }}
                     >
-                      <td className={`px-2 py-2.5 font-semibold text-slate-800 truncate border-l-4 ${corDoTipo(item.tipo_solicitacao).borda}`}>{item.cod_liberacao}</td>
+                      <td className={`pl-2 pr-1 py-2.5 border-l-4 ${corDoTipo(item.tipo_solicitacao).borda}`}>
+                        {idsSelecionaveis.has(item.id) && (
+                          <input
+                            type="checkbox"
+                            checked={selecionados.has(item.id)}
+                            onChange={() => alternarSelecao(item.id)}
+                            aria-label={`Selecionar ${item.nome_cliente || item.cod_liberacao}`}
+                            className="w-4 h-4 accent-indigo-600 cursor-pointer align-middle"
+                          />
+                        )}
+                      </td>
+                      <td className="px-2 py-2.5 font-semibold text-slate-800 truncate">{item.cod_liberacao}</td>
                       <td className="px-2 py-2.5 font-medium text-slate-700 truncate" onMouseEnter={(e) => entrarPrevia(e, 'Cliente', item.nome_cliente)} onMouseMove={moverPrevia} onMouseLeave={sairPrevia}>{item.nome_cliente || <span className="text-slate-300">-</span>}</td>
                       <td className="px-2 py-2.5 font-medium text-slate-600 truncate">{item.rca}</td>
                       <td className="px-2 py-2.5">{pilulaTipo(item.tipo_solicitacao)}</td>
@@ -1791,11 +1940,20 @@ export default function SolicitacoesApp() {
                 <div
                   key={item.id}
                   onClick={(e) => abrirItem(item, e)}
-                  className={`fade-in min-w-0 flex flex-col gap-3 bg-white border border-slate-200 border-l-4 ${corDoTipo(item.tipo_solicitacao).borda} rounded-2xl p-4 shadow-sm cursor-pointer`}
+                  className={`fade-in min-w-0 flex flex-col gap-3 border border-l-4 ${corDoTipo(item.tipo_solicitacao).borda} rounded-2xl p-4 shadow-sm cursor-pointer transition-colors ${selecionados.has(item.id) ? 'bg-rose-50/70 border-rose-200 ring-2 ring-rose-300' : 'bg-white border-slate-200'}`}
                   style={{ animationDelay: `${Math.min(idx, 10) * 30}ms` }}
                 >
                   <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
+                    {idsSelecionaveis.has(item.id) && (
+                      <input
+                        type="checkbox"
+                        checked={selecionados.has(item.id)}
+                        onChange={() => alternarSelecao(item.id)}
+                        aria-label={`Selecionar ${item.nome_cliente || item.cod_liberacao}`}
+                        className="w-5 h-5 mt-0.5 shrink-0 accent-indigo-600 cursor-pointer"
+                      />
+                    )}
+                    <div className="min-w-0 flex-1">
                       <p className={`font-bold break-words ${item.nome_cliente ? 'text-slate-800' : 'text-slate-400 italic font-medium'}`}>
                         {item.nome_cliente || 'Cliente não informado'}
                       </p>
