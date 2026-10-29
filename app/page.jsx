@@ -469,7 +469,9 @@ export default function SolicitacoesApp() {
     if (error) {
       toast.error('Erro ao carregar solicitações');
     } else {
-      setSolicitacoes(data || []);
+      // remove repetidos (por segurança, se o tempo real e a recarga chegarem juntos)
+      const vistos = new Set();
+      setSolicitacoes((data || []).filter((item) => (vistos.has(item.id) ? false : (vistos.add(item.id), true))));
       if ((data || []).length >= LIMITE_LINHAS) {
         toast(`Mostrando as ${LIMITE_LINHAS} mais recentes. Refine o período para ver as demais.`, { icon: 'ℹ️' });
       }
@@ -562,7 +564,8 @@ export default function SolicitacoesApp() {
               icon: '🔔',
               duration: 5000
             });
-            setSolicitacoes((prev) => [payload.new, ...prev]);
+            // a lista pode já ter recarregado com ela (quem enviou): não duplica
+            setSolicitacoes((prev) => (prev.some((item) => item.id === payload.new.id) ? prev : [payload.new, ...prev]));
           } else if (payload.eventType === 'UPDATE') {
             const reaberta = ehReabertura(solicitacoesRef.current.find((i) => i.id === payload.new.id), payload.new);
             toast(reaberta
