@@ -4,10 +4,6 @@
     "app": {
       "root": ".",
       "framework": "nextjs"
-    },
-    "solicitacoes-diarias": {
-      "root": "solicitacoes-diarias",
-      "framework": "nextjs"
     }
   },
   "rewrites": [
