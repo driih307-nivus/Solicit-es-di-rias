@@ -242,7 +242,8 @@ export default function SolicitacoesApp() {
   const [confirmacao, setConfirmacao] = useState(null);      // pop-up de confirmação
   const [selecionados, setSelecionados] = useState(() => new Set()); // ids marcados para excluir em lote
   const [excluindoLote, setExcluindoLote] = useState(false);
-  const [nomeStatus, setNomeStatus] = useState('idle');        // idle | buscando | encontrado | nao_encontrado | erro
+  const [nomeStatus, setNomeStatus] = useState('idle');        // idle | buscando | encontrado | nao_encontrado | cadastrado | erro
+  const [cadastrandoCliente, setCadastrandoCliente] = useState(false);
   const nomeAutoRef = useRef(false);                           // nome veio da lista (preenchido sozinho)
   const [enviando, setEnviando] = useState(false);
   const [anexosExistentes, setAnexosExistentes] = useState([]); // já salvos (edição)
@@ -634,6 +635,38 @@ export default function SolicitacoesApp() {
 
   const pedirConfirmacao = (cfg) => setConfirmacao(cfg);
 
+  // Cadastra na tabela "clientes" um código que não estava na lista (para as próximas vezes já vir preenchido)
+  const cadastrarCliente = async (cod, nome, silencioso = false) => {
+    const codigo = String(cod || '').trim();
+    const nomeLimpo = String(nome || '').trim().replace(/\s+/g, ' ').toUpperCase();
+    if (!/^\d{6}$/.test(codigo)) {
+      if (!silencioso) toast.error(`Digite o código com ${CODIGO_DIGITOS} dígitos antes de cadastrar.`);
+      return false;
+    }
+    if (nomeLimpo.length < 2) {
+      if (!silencioso) toast.error('Digite o nome do cliente antes de cadastrar.');
+      return false;
+    }
+    setCadastrandoCliente(true);
+    try {
+      const { error } = await supabase.from('clientes').insert([{ codigo, nome: nomeLimpo }]);
+      if (error && error.code !== '23505') { // 23505 = já existe: conta como cadastrado
+        if (!silencioso) toast.error('Não foi possível cadastrar o cliente: ' + (error.message || 'verifique a permissão de INSERT (RLS) da tabela clientes.'));
+        else console.log('Cliente não cadastrado:', error);
+        return false;
+      }
+      if (!silencioso) {
+        nomeAutoRef.current = true;
+        setForm((f) => (f.cod_liberacao === codigo ? { ...f, nome_cliente: nomeLimpo } : f));
+        setNomeStatus('cadastrado');
+        toast.success(`Cliente ${codigo} cadastrado na lista.`);
+      }
+      return true;
+    } finally {
+      setCadastrandoCliente(false);
+    }
+  };
+
   // Abrir modal para uma nova solicitação
   const abrirNova = () => {
     setEditandoId(null);
@@ -970,6 +1003,7 @@ export default function SolicitacoesApp() {
     }
 
     const qtdAnexos = anexosExistentes.length + novosArquivos.length;
+    const clienteNovo = nomeStatus === 'nao_encontrado';
     pedirConfirmacao({
       titulo: editandoId ? 'Salvar alterações?' : 'Enviar solicitação?',
       mensagem: editandoId
@@ -983,14 +1017,15 @@ export default function SolicitacoesApp() {
         ['Cliente', nome],
         ['RCA', rca],
         ['Tipo', form.tipo_solicitacao],
-        ['Anexos', String(qtdAnexos)]
+        ['Anexos', String(qtdAnexos)],
+        ...(clienteNovo ? [['Cliente novo', 'será cadastrado na lista']] : [])
       ],
-      onConfirm: () => enviarSolicitacao(cod, rca, nome)
+      onConfirm: () => enviarSolicitacao(cod, rca, nome, clienteNovo)
     });
   };
 
   // Criar ou salvar edição (com anexos)
-  const enviarSolicitacao = async (cod, rca, nome) => {
+  const enviarSolicitacao = async (cod, rca, nome, clienteNovo = false) => {
     setEnviando(true);
     const toastId = toast.loading(
       novosArquivos.length ? 'Enviando anexos...' : editandoId ? 'Salvando alterações...' : 'Enviando solicitação...'
@@ -1029,6 +1064,7 @@ export default function SolicitacoesApp() {
         toast.error('Não foi possível salvar. Verifique a permissão de UPDATE (RLS) da tabela.', { id: toastId });
       } else {
         await removerArquivos(anexosRemovidos.map((a) => a.path));
+        if (clienteNovo) await cadastrarCliente(cod, nome, true);
         toast.success('Solicitação atualizada!', { id: toastId });
         setSolicitacoes((prev) => prev.map((item) => (item.id === data[0].id ? data[0] : item)));
         fecharModalForm();
@@ -1055,6 +1091,7 @@ export default function SolicitacoesApp() {
       await removerArquivos(enviados.map((a) => a.path));
       toast.error('Erro ao enviar: ' + error.message, { id: toastId });
     } else {
+      if (clienteNovo) await cadastrarCliente(cod, nome, true);
       toast.success('Solicitação enviada com sucesso!', { id: toastId });
       fecharModalForm();
       fetchSolicitacoes();
@@ -2180,23 +2217,41 @@ export default function SolicitacoesApp() {
                   type="text"
                   required
                   autoComplete="off"
-                  placeholder={nomeStatus === 'buscando' ? 'Buscando...' : 'Preenchido ao digitar o código'}
+                  placeholder={nomeStatus === 'buscando' ? 'Buscando...' : nomeStatus === 'nao_encontrado' ? 'Digite o nome do cliente' : 'Preenchido ao digitar o código'}
                   value={form.nome_cliente}
                   onChange={(e) => {
                     nomeAutoRef.current = false;
                     setForm({ ...form, nome_cliente: e.target.value });
                   }}
                   className={`w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:outline-none transition-colors ${
-                    nomeStatus === 'encontrado'
+                    nomeStatus === 'encontrado' || nomeStatus === 'cadastrado'
                       ? 'border-emerald-300 bg-emerald-50/50 focus:ring-emerald-500'
+                      : nomeStatus === 'nao_encontrado'
+                      ? 'border-amber-300 focus:ring-amber-400'
                       : 'border-slate-300 focus:ring-indigo-500'
                   }`}
                 />
                 {nomeStatus === 'encontrado' && (
                   <p className="fade-in text-[11px] text-emerald-600 mt-1">Cliente encontrado na lista.</p>
                 )}
+                {nomeStatus === 'cadastrado' && (
+                  <p className="fade-in text-[11px] text-emerald-600 mt-1">Cliente cadastrado na lista. Das próximas vezes o nome já vem preenchido.</p>
+                )}
                 {nomeStatus === 'nao_encontrado' && (
-                  <p className="fade-in text-[11px] text-amber-600 mt-1">Código não encontrado na lista. Digite o nome do cliente.</p>
+                  <div className="fade-in mt-1.5 rounded-lg border border-amber-200 bg-amber-50 p-2.5 space-y-2">
+                    <p className="text-[11px] text-amber-700">
+                      Código <b>{form.cod_liberacao}</b> não está na lista. Digite o nome acima e cadastre o cliente. Se enviar sem cadastrar, ele é cadastrado junto com a solicitação.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => cadastrarCliente(form.cod_liberacao, form.nome_cliente)}
+                      disabled={cadastrandoCliente || form.nome_cliente.trim().length < 2}
+                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold text-white bg-amber-600 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed transition"
+                    >
+                      {cadastrandoCliente ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <UserCheck className="w-3.5 h-3.5" />}
+                      {cadastrandoCliente ? 'Cadastrando...' : 'Cadastrar cliente na lista'}
+                    </button>
+                  </div>
                 )}
                 {nomeStatus === 'erro' && (
                   <p className="fade-in text-[11px] text-amber-600 mt-1">Não foi possível consultar a lista. Digite o nome do cliente.</p>
