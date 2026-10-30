@@ -8,6 +8,15 @@ const aprovador = process.env.NEXT_PUBLIC_PERFIL === 'aprovador';
 export const metadata = {
   title: `${aprovador ? 'Aprovador' : 'Solicitante'} — Solicitações Diárias`,
   description: 'Sistema de gestão e aprovação de solicitações em tempo real',
+  // ícone da aba do navegador e da tela inicial (cada perfil tem o seu: aprovador com ✓ verde, solicitante com seta laranja)
+  icons: {
+    icon: [
+      { url: `/icons/${aprovador ? 'aprovador' : 'solicitante'}-48.png`, sizes: '48x48', type: 'image/png' },
+      { url: `/icons/${aprovador ? 'aprovador' : 'solicitante'}-192.png`, sizes: '192x192', type: 'image/png' },
+    ],
+    apple: { url: `/icons/${aprovador ? 'aprovador' : 'solicitante'}-apple-180.png`, sizes: '180x180' },
+  },
+  appleWebApp: { capable: true, title: aprovador ? 'Aprovador' : 'Solicitações', statusBarStyle: 'default' },
 };
 
 export const viewport = {
