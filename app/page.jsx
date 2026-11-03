@@ -62,7 +62,7 @@ const CODIGO_DIGITOS = 6; // código do cliente: exatamente 6 dígitos
 
 // ===== Anexos (Supabase Storage) =====
 const BUCKET = 'anexos';
-const MAX_ARQUIVOS = 5;
+const MAX_ARQUIVOS = 20;
 const MAX_MB = 10;
 const MAX_BYTES = MAX_MB * 1024 * 1024;
 const ACEITA_ARQUIVOS = 'image/*,audio/*,application/pdf,.pdf,.m4a,.opus,.amr,.aac,.heic';
