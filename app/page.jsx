@@ -2,13 +2,14 @@
 
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
+import { comprimirVideo } from '@/lib/comprimirVideo';
 import toast from 'react-hot-toast';
 import confetti from 'canvas-confetti';
 import {
   Clock, CheckCircle2, XCircle, AlertCircle, Plus, Search,
   Download, RefreshCw, UserCheck, Send, MessageSquare, Shield, User,
   Pencil, Trash2, X, CalendarDays,
-  Paperclip, FileText, Music, Image as ImageIcon, ExternalLink, Mic, Square, Eye, Bell, BellOff, Sun, Moon, RotateCcw
+  Paperclip, FileText, Music, Image as ImageIcon, Video, ExternalLink, Mic, Square, Eye, Bell, BellOff, Sun, Moon, RotateCcw
 } from 'lucide-react';
 
 const TIPOS_SOLICITACAO = [
@@ -65,24 +66,29 @@ const BUCKET = 'anexos';
 const MAX_ARQUIVOS = 20;
 const MAX_MB = 10;
 const MAX_BYTES = MAX_MB * 1024 * 1024;
-const ACEITA_ARQUIVOS = 'image/*,audio/*,application/pdf,.pdf,.m4a,.opus,.amr,.aac,.heic';
+const MAX_VIDEO_MB = 50;                       // depois da compressão
+const MAX_VIDEO_BYTES = MAX_VIDEO_MB * 1024 * 1024;
+const MAX_VIDEO_ORIGINAL_BYTES = 500 * 1024 * 1024; // vídeo escolhido (antes de comprimir)
+const ACEITA_ARQUIVOS = 'image/*,audio/*,video/*,application/pdf,.pdf,.m4a,.opus,.amr,.aac,.heic,.mp4,.mov,.3gp,.webm';
 
 const MIME_POR_EXTENSAO = {
   pdf: 'application/pdf',
   jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif', heic: 'image/heic',
   mp3: 'audio/mpeg', m4a: 'audio/mp4', wav: 'audio/wav', ogg: 'audio/ogg', opus: 'audio/ogg',
-  aac: 'audio/aac', amr: 'audio/amr', webm: 'audio/webm'
+  aac: 'audio/aac', amr: 'audio/amr', webm: 'audio/webm',
+  mp4: 'video/mp4', mov: 'video/quicktime', '3gp': 'video/3gpp', m4v: 'video/x-m4v'
 };
 
 // Descobre o tipo do arquivo (alguns celulares enviam o tipo vazio)
 const tipoDoArquivo = (file) => {
+  if (file.type === 'video/webm' || (file.type && file.type.startsWith('video/'))) return file.type;
   if (file.type) return file.type;
   const ext = (file.name.split('.').pop() || '').toLowerCase();
   return MIME_POR_EXTENSAO[ext] || '';
 };
 
 const tipoPermitido = (tipo) =>
-  tipo.startsWith('image/') || tipo.startsWith('audio/') || tipo === 'application/pdf';
+  tipo.startsWith('image/') || tipo.startsWith('audio/') || tipo.startsWith('video/') || tipo === 'application/pdf';
 
 const nomeSeguro = (nome) =>
   nome
@@ -105,6 +111,7 @@ const formatarTamanho = (bytes) => {
 const iconeAnexo = (tipo = '', cls = 'w-4 h-4') =>
   tipo.startsWith('image/') ? <ImageIcon className={cls} /> :
   tipo.startsWith('audio/') ? <Music className={cls} /> :
+  tipo.startsWith('video/') ? <Video className={cls} /> :
   <FileText className={cls} />;
 
 const MAX_SEGUNDOS_GRAVACAO = 300; // 5 minutos
@@ -250,6 +257,7 @@ export default function SolicitacoesApp() {
   const [anexosRemovidos, setAnexosRemovidos] = useState([]);   // marcados para remover ao salvar
   const [novosArquivos, setNovosArquivos] = useState([]);       // escolhidos agora (File[])
   const [anexosAbertoId, setAnexosAbertoId] = useState(null);   // janela de visualização
+  const [comprimindo, setComprimindo] = useState(0);           // vídeos sendo comprimidos
   const [urlsAnexos, setUrlsAnexos] = useState({});
   const [preview, setPreview] = useState(null);                // {url, nome, tipo, local}
   const [gravando, setGravando] = useState(false);
@@ -882,31 +890,56 @@ export default function SolicitacoesApp() {
     liberarMicrofone();
   }, []);
 
-  // Escolher arquivos no formulário (valida tipo, tamanho e quantidade)
-  const escolherArquivos = (e) => {
+  // Escolher arquivos no formulário (valida tipo, tamanho e quantidade; vídeos são comprimidos aqui)
+  const escolherArquivos = async (e) => {
     const lista = Array.from(e.target.files || []);
     e.target.value = ''; // permite escolher o mesmo arquivo de novo
     if (!lista.length) return;
 
     let total = anexosExistentes.length + novosArquivos.length;
     const aceitos = [];
+    const videos = [];
     for (const f of lista) {
-      if (!tipoPermitido(tipoDoArquivo(f))) {
-        toast.error(`"${f.name}": use imagem, áudio ou PDF.`);
+      const tipo = tipoDoArquivo(f);
+      if (!tipoPermitido(tipo)) {
+        toast.error(`"${f.name}": use imagem, áudio, vídeo ou PDF.`);
         continue;
       }
-      if (f.size > MAX_BYTES) {
+      const ehVideo = tipo.startsWith('video/');
+      if (!ehVideo && f.size > MAX_BYTES) {
         toast.error(`"${f.name}" passa de ${MAX_MB} MB.`);
+        continue;
+      }
+      if (ehVideo && f.size > MAX_VIDEO_ORIGINAL_BYTES) {
+        toast.error(`"${f.name}" é grande demais (máx. 500 MB antes de comprimir).`);
         continue;
       }
       if (total >= MAX_ARQUIVOS) {
         toast.error(`Máximo de ${MAX_ARQUIVOS} anexos por solicitação.`);
         break;
       }
-      aceitos.push(f);
+      (ehVideo ? videos : aceitos).push(f);
       total++;
     }
     if (aceitos.length) setNovosArquivos((prev) => [...prev, ...aceitos]);
+
+    for (const v of videos) {
+      const toastId = toast.loading(`Comprimindo "${v.name}"... 0% (mantenha esta tela aberta)`);
+      setComprimindo((n) => n + 1);
+      try {
+        const r = await comprimirVideo(v, (pct) => toast.loading(`Comprimindo "${v.name}"... ${pct}% (mantenha esta tela aberta)`, { id: toastId }));
+        if (r.file.size > MAX_VIDEO_BYTES) {
+          toast.error(`"${v.name}" ficou com ${formatarTamanho(r.file.size)} e passa de ${MAX_VIDEO_MB} MB. Envie um vídeo mais curto.`, { id: toastId });
+          continue;
+        }
+        setNovosArquivos((prev) => [...prev, r.file]);
+        toast.success(r.comprimido
+          ? `Vídeo comprimido: ${formatarTamanho(r.antes)} → ${formatarTamanho(r.file.size)}.`
+          : `Vídeo adicionado (${formatarTamanho(r.file.size)}).`, { id: toastId });
+      } finally {
+        setComprimindo((n) => n - 1);
+      }
+    }
   };
 
   // Envia os arquivos novos ao Storage; se algum falhar, desfaz os já enviados
@@ -984,6 +1017,10 @@ export default function SolicitacoesApp() {
   // Valida o formulário e pede confirmação antes de enviar/salvar
   const handleSubmit = (e) => {
     e.preventDefault();
+    if (comprimindo > 0) {
+      toast.error('Aguarde terminar a compressão do vídeo.');
+      return;
+    }
     if (enviando) return;
     if (gravando) {
       toast.error('Pare a gravação antes de enviar.');
@@ -2091,6 +2128,7 @@ export default function SolicitacoesApp() {
                           />
                         )}
                         {url && a.tipo?.startsWith('audio/') && <audio controls src={url} className="w-full" />}
+                        {url && a.tipo?.startsWith('video/') && <video controls playsInline preload="metadata" src={url} className="w-full max-h-72 rounded-lg bg-black" />}
 
                         <div className="flex gap-2">
                           <button
@@ -2150,6 +2188,9 @@ export default function SolicitacoesApp() {
                 <Music className="w-8 h-8 text-indigo-600" />
                 <audio controls autoPlay src={preview.url} className="w-full" />
               </div>
+            )}
+            {preview.tipo?.startsWith('video/') && (
+              <video controls autoPlay playsInline src={preview.url} className="max-w-full max-h-full rounded-lg bg-black" />
             )}
             {preview.tipo === 'application/pdf' && (
               <iframe src={preview.url} title={preview.nome} className="w-full h-full rounded-lg bg-white" />
@@ -2301,7 +2342,7 @@ export default function SolicitacoesApp() {
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Anexos (imagem, áudio ou PDF)</label>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Anexos (imagem, áudio, vídeo ou PDF)</label>
                 {gravando ? (
                   <div className="flex items-center gap-2 border-2 border-rose-300 bg-rose-50 rounded-lg px-3 py-2.5 text-sm">
                     <span className="w-2.5 h-2.5 rounded-full bg-rose-600 animate-pulse" />
