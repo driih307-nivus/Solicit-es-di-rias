@@ -131,6 +131,14 @@ const FUNCIONARIOS_PADRAO = [
 ];
 const CHAVE_SOLICITANTE = 'sl_solicitante';
 
+// Cor do nome de cada solicitante (pelo primeiro nome, sem acento). Quem não estiver aqui fica azul.
+// As cores ficam em globals.css (.sol-cor-*), com versão clara para o tema escuro.
+const CORES_SOLICITANTE = { adriano: 'azul', jennifer: 'laranja', jenifer: 'laranja', fabricio: 'verde', anne: 'rosa', jacqueline: 'roxo' };
+const corSolicitante = (nome) => {
+  const primeiro = String(nome || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().split(/\s+/)[0].toLowerCase();
+  return 'sol-cor-' + (CORES_SOLICITANTE[primeiro] || 'azul');
+};
+
 const solicitanteSalvo = () => {
   try {
     return localStorage.getItem(CHAVE_SOLICITANTE) || '';
@@ -1768,8 +1776,8 @@ export default function SolicitacoesApp() {
     anexos:      { titulo: 'Anexos',        largura: 4,  centro: true, td: '', cel: (i) => chipAnexos(i) },
     acoes:       { titulo: 'Ações',         largura: 9,  td: '',
                    cel: (i) => <div className="flex items-center justify-center gap-1 flex-wrap">{acoesItem(i)}</div> },
-    solicitante: { titulo: 'Solicitante',   largura: 8,  td: 'font-medium text-indigo-700 truncate', props: (i) => previaProps('Solicitante', i.solicitante),
-                   cel: (i) => i.solicitante || <span className="text-slate-300">-</span> }
+    solicitante: { titulo: 'Solicitante',   largura: 8,  td: 'font-semibold truncate', props: (i) => previaProps('Solicitante', i.solicitante),
+                   cel: (i) => i.solicitante ? <span className={corSolicitante(i.solicitante)}>{i.solicitante}</span> : <span className="text-slate-300">-</span> }
   };
 
   const pilulaTipo = (tipo, extra = '') => (
@@ -2223,7 +2231,7 @@ export default function SolicitacoesApp() {
                       </p>
                       <p className="text-xs text-slate-500 mt-0.5">Cód. {item.cod_liberacao} · RCA {item.rca}</p>
                       {item.solicitante && (
-                        <p className="text-xs text-indigo-700 font-medium mt-0.5 flex items-center gap-1 min-w-0">
+                        <p className={`text-xs font-semibold mt-0.5 flex items-center gap-1 min-w-0 ${corSolicitante(item.solicitante)}`}>
                           <User className="w-3.5 h-3.5 shrink-0" /> <span className="truncate">{item.solicitante}</span>
                         </p>
                       )}

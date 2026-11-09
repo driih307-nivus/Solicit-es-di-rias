@@ -159,3 +159,15 @@ html.dark { color-scheme: dark; }
 .dark .hover\:bg-slate-200\/70:hover { background-color:#334155 }
 .dark .border-rose-200 { border-color:rgba(244,63,94,0.35) }
 .dark .ring-rose-300 { --tw-ring-color:rgba(244,63,94,0.45) }
+
+/* Cor do nome de cada solicitante (page.jsx: CORES_SOLICITANTE) */
+.sol-cor-azul    { color:#4338ca }
+.sol-cor-laranja { color:#ea580c }
+.sol-cor-verde   { color:#166534 }
+.sol-cor-rosa    { color:#db2777 }
+.sol-cor-roxo    { color:#7e22ce }
+.dark .sol-cor-azul    { color:#a5b4fc }
+.dark .sol-cor-laranja { color:#fdba74 }
+.dark .sol-cor-verde   { color:#4ade80 }
+.dark .sol-cor-rosa    { color:#f9a8d4 }
+.dark .sol-cor-roxo    { color:#d8b4fe }
