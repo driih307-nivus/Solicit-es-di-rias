@@ -148,3 +148,14 @@ html.dark { color-scheme: dark; }
 .dark .text-sky-800 { color:#7dd3fc }
 .dark .text-teal-800 { color:#5eead4 }
 .dark .text-violet-800 { color:#c4b5fd }
+
+/* Tons translúcidos que faltavam no tema escuro (faixa "Marcar todas", itens selecionados, colunas) */
+.dark .bg-slate-50\/60 { background-color:rgba(30,41,59,.55) }
+.dark .bg-rose-50\/70 { background-color:rgba(244,63,94,0.12) }
+.dark .bg-rose-50\/40 { background-color:rgba(244,63,94,0.08) }
+.dark .bg-indigo-50\/40 { background-color:rgba(99,102,241,0.08) }
+.dark .bg-indigo-50\/60 { background-color:rgba(99,102,241,0.12) }
+.dark .bg-indigo-100\/70 { background-color:rgba(99,102,241,0.22) }
+.dark .hover\:bg-slate-200\/70:hover { background-color:#334155 }
+.dark .border-rose-200 { border-color:rgba(244,63,94,0.35) }
+.dark .ring-rose-300 { --tw-ring-color:rgba(244,63,94,0.45) }

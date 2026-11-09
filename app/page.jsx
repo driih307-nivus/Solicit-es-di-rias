@@ -9,7 +9,7 @@ import {
   Clock, CheckCircle2, XCircle, AlertCircle, Plus, Search,
   Download, RefreshCw, UserCheck, Send, MessageSquare, Shield, User,
   Pencil, Trash2, X, CalendarDays,
-  Paperclip, FileText, Music, Image as ImageIcon, Video, ExternalLink, Mic, Square, Eye, Bell, BellOff, Sun, Moon, RotateCcw
+  Paperclip, FileText, Music, Image as ImageIcon, Video, ExternalLink, Mic, Square, Eye, Bell, BellOff, Sun, Moon, RotateCcw, GripVertical
 } from 'lucide-react';
 
 const TIPOS_SOLICITACAO = [
@@ -145,6 +145,27 @@ const lembrarSolicitante = (nome) => {
   } catch (e) {}
 };
 
+// ===== Colunas da tabela (computador): ordem pode ser reorganizada arrastando o título =====
+const COLUNAS_PADRAO = [
+  'cod', 'cliente', 'rca', 'tipo', 'status', 'observacoes', 'motivo',
+  'enviada', 'finalizada', 'tempo', 'anexos', 'acoes', 'solicitante'
+];
+const CHAVE_COLUNAS = 'sl_colunas_ordem';
+
+// Garante uma ordem válida (ignora colunas que não existem e acrescenta as novas no fim)
+const normalizarOrdem = (lista) => {
+  const validas = (Array.isArray(lista) ? lista : []).filter((c, i, arr) => COLUNAS_PADRAO.includes(c) && arr.indexOf(c) === i);
+  return [...validas, ...COLUNAS_PADRAO.filter((c) => !validas.includes(c))];
+};
+
+const ordemColunasSalva = () => {
+  try {
+    return normalizarOrdem(JSON.parse(localStorage.getItem(CHAVE_COLUNAS) || 'null'));
+  } catch (e) {
+    return COLUNAS_PADRAO;
+  }
+};
+
 const formVazio = () => ({
   solicitante: typeof window !== 'undefined' ? solicitanteSalvo() : '',
   cod_liberacao: '',
@@ -268,6 +289,39 @@ export default function SolicitacoesApp() {
   const [filtroStatus, setFiltroStatus] = useState('TODOS');
   const [filtroSolicitante, setFiltroSolicitante] = useState(''); // '' = todos
   const [funcionarios, setFuncionarios] = useState(FUNCIONARIOS_PADRAO);
+  const [ordemColunas, setOrdemColunas] = useState(COLUNAS_PADRAO);
+  const [colArrastada, setColArrastada] = useState(null);
+  const [colAlvo, setColAlvo] = useState(null);
+
+  // Ordem das colunas salva neste aparelho
+  useEffect(() => {
+    setOrdemColunas(ordemColunasSalva());
+  }, []);
+
+  const salvarOrdemColunas = (nova) => {
+    setOrdemColunas(nova);
+    try {
+      localStorage.setItem(CHAVE_COLUNAS, JSON.stringify(nova));
+    } catch (e) {}
+  };
+
+  const moverColuna = (origem, destino) => {
+    if (!origem || !destino || origem === destino) return;
+    const nova = ordemColunas.filter((c) => c !== origem);
+    const iDestino = ordemColunas.indexOf(destino);
+    const iOrigem = ordemColunas.indexOf(origem);
+    // arrastando para a direita entra depois do alvo; para a esquerda, antes
+    const pos = nova.indexOf(destino) + (iOrigem < iDestino ? 1 : 0);
+    nova.splice(pos, 0, origem);
+    salvarOrdemColunas(nova);
+  };
+
+  const restaurarColunas = () => {
+    salvarOrdemColunas(COLUNAS_PADRAO);
+    toast.success('Ordem das colunas restaurada.');
+  };
+
+  const ordemPersonalizada = ordemColunas.join() !== COLUNAS_PADRAO.join();
   const [busca, setBusca] = useState('');
   const [modalAberto, setModalAberto] = useState(false);
   const [modalAprovacao, setModalAprovacao] = useState(null);
@@ -1690,6 +1744,34 @@ export default function SolicitacoesApp() {
     );
   };
 
+  // Cada coluna: título, largura, alinhamento e conteúdo da célula
+  const previaProps = (titulo, texto) => ({
+    onMouseEnter: (e) => entrarPrevia(e, titulo, texto),
+    onMouseMove: moverPrevia,
+    onMouseLeave: sairPrevia
+  });
+  const DEF_COLUNAS = {
+    cod:         { titulo: 'Cód.',          largura: 6,  td: 'font-semibold text-slate-800 truncate', cel: (i) => i.cod_liberacao },
+    cliente:     { titulo: 'Cliente',       largura: 10, td: 'font-medium text-slate-700 truncate', props: (i) => previaProps('Cliente', i.nome_cliente),
+                   cel: (i) => i.nome_cliente || <span className="text-slate-300">-</span> },
+    rca:         { titulo: 'RCA',           largura: 4,  td: 'font-medium text-slate-600 truncate', cel: (i) => i.rca },
+    tipo:        { titulo: 'Tipo',          largura: 13, td: '', cel: (i) => pilulaTipo(i.tipo_solicitacao) },
+    status:      { titulo: 'Status',        largura: 7,  centro: true, td: '', cel: (i) => badge(i) },
+    observacoes: { titulo: 'Observações',   largura: 9,  td: 'truncate text-slate-600', props: (i) => previaProps('Observações', i.observacoes),
+                   cel: (i) => i.observacoes || '-' },
+    motivo:      { titulo: 'Motivo recusa', largura: 8,  td: 'truncate text-rose-600 font-medium', props: (i) => previaProps('Motivo da recusa', i.motivo_recusa),
+                   cel: (i) => i.motivo_recusa || '-' },
+    enviada:     { titulo: 'Enviada',       largura: 7,  td: 'text-slate-500 whitespace-nowrap', cel: (i) => formatDataCurta(i.data_enviada) },
+    finalizada:  { titulo: 'Finalizada',    largura: 7,  td: 'text-slate-500 whitespace-nowrap', cel: (i) => formatDataCurta(i.data_finalizada) },
+    tempo:       { titulo: 'Tempo',         largura: 5,  centro: true, td: 'font-mono text-[11px] font-semibold text-slate-700',
+                   cel: (i) => calcularTempoConclusao(i.data_enviada, i.data_finalizada) },
+    anexos:      { titulo: 'Anexos',        largura: 4,  centro: true, td: '', cel: (i) => chipAnexos(i) },
+    acoes:       { titulo: 'Ações',         largura: 9,  td: '',
+                   cel: (i) => <div className="flex items-center justify-center gap-1 flex-wrap">{acoesItem(i)}</div> },
+    solicitante: { titulo: 'Solicitante',   largura: 8,  td: 'font-medium text-indigo-700 truncate', props: (i) => previaProps('Solicitante', i.solicitante),
+                   cel: (i) => i.solicitante || <span className="text-slate-300">-</span> }
+  };
+
   const pilulaTipo = (tipo, extra = '') => (
     <span className={`inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-semibold leading-tight ring-1 ring-inset ${corDoTipo(tipo).pill} ${extra}`}>
       <span className={`w-2 h-2 rounded-full shrink-0 ${corDoTipo(tipo).dot}`} />
@@ -2004,22 +2086,26 @@ export default function SolicitacoesApp() {
             )}
 
             <div className="hidden xl:block">
+              <div className="flex items-center justify-end gap-3 px-4 py-1.5 border-b border-slate-200 text-[11px] text-slate-500">
+                <span className="inline-flex items-center gap-1">
+                  <GripVertical className="w-3.5 h-3.5" /> Arraste o título de uma coluna para mudar a ordem
+                </span>
+                {ordemPersonalizada && (
+                  <button
+                    type="button"
+                    onClick={restaurarColunas}
+                    className="fade-in inline-flex items-center gap-1 px-2.5 py-1 rounded-lg font-semibold text-indigo-600 hover:bg-indigo-50 transition"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" /> Restaurar ordem padrão
+                  </button>
+                )}
+              </div>
               <table className="w-full table-fixed text-left border-collapse text-xs">
                 <colgroup>
                   <col style={{ width: '3%' }} />
-                  <col style={{ width: '8%' }} />
-                  <col style={{ width: '5%' }} />
-                  <col style={{ width: '10%' }} />
-                  <col style={{ width: '4%' }} />
-                  <col style={{ width: '13%' }} />
-                  <col style={{ width: '7%' }} />
-                  <col style={{ width: '9%' }} />
-                  <col style={{ width: '8%' }} />
-                  <col style={{ width: '7%' }} />
-                  <col style={{ width: '7%' }} />
-                  <col style={{ width: '6%' }} />
-                  <col style={{ width: '4%' }} />
-                  <col style={{ width: '9%' }} />
+                  {ordemColunas.map((c) => (
+                    <col key={c} style={{ width: `${DEF_COLUNAS[c].largura}%` }} />
+                  ))}
                 </colgroup>
                 <thead>
                   <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold uppercase text-[11px] leading-tight">
@@ -2035,19 +2121,44 @@ export default function SolicitacoesApp() {
                         className="w-4 h-4 accent-indigo-600 cursor-pointer align-middle"
                       />
                     </th>
-                    <th className="px-2 py-2.5">Solicitante</th>
-                    <th className="px-2 py-2.5">Cód.</th>
-                    <th className="px-2 py-2.5">Cliente</th>
-                    <th className="px-2 py-2.5">RCA</th>
-                    <th className="px-2 py-2.5">Tipo</th>
-                    <th className="px-2 py-2.5 text-center">Status</th>
-                    <th className="px-2 py-2.5">Observações</th>
-                    <th className="px-2 py-2.5">Motivo recusa</th>
-                    <th className="px-2 py-2.5">Enviada</th>
-                    <th className="px-2 py-2.5">Finalizada</th>
-                    <th className="px-2 py-2.5 text-center">Tempo</th>
-                    <th className="px-2 py-2.5 text-center">Anexos</th>
-                    <th className="px-2 py-2.5 text-center">Ações</th>
+                    {ordemColunas.map((c) => {
+                      const col = DEF_COLUNAS[c];
+                      const alvo = colAlvo === c && colArrastada && colArrastada !== c;
+                      const paraDireita = alvo && ordemColunas.indexOf(colArrastada) < ordemColunas.indexOf(c);
+                      return (
+                        <th
+                          key={c}
+                          draggable
+                          title="Arraste para mudar a posição da coluna"
+                          onDragStart={(e) => {
+                            setColArrastada(c);
+                            e.dataTransfer.effectAllowed = 'move';
+                            try { e.dataTransfer.setData('text/plain', c); } catch (err) {}
+                          }}
+                          onDragOver={(e) => {
+                            if (!colArrastada) return;
+                            e.preventDefault();
+                            e.dataTransfer.dropEffect = 'move';
+                            if (colAlvo !== c) setColAlvo(c);
+                          }}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            moverColuna(colArrastada, c);
+                            setColArrastada(null);
+                            setColAlvo(null);
+                          }}
+                          onDragEnd={() => { setColArrastada(null); setColAlvo(null); }}
+                          className={`group px-2 py-2.5 cursor-grab active:cursor-grabbing select-none transition-colors ${col.centro || c === 'acoes' ? 'text-center' : ''} ${
+                            colArrastada === c ? 'opacity-40' : ''
+                          } ${alvo ? `bg-indigo-100/70 text-indigo-700 ${paraDireita ? 'shadow-[inset_-3px_0_0_0_#6366f1]' : 'shadow-[inset_3px_0_0_0_#6366f1]'}` : 'hover:bg-slate-100'}`}
+                        >
+                          <span className="inline-flex items-center gap-1 max-w-full">
+                            <GripVertical className="w-3 h-3 shrink-0 opacity-30 group-hover:opacity-80" />
+                            <span className="truncate">{col.titulo}</span>
+                          </span>
+                        </th>
+                      );
+                    })}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200">
@@ -2069,27 +2180,18 @@ export default function SolicitacoesApp() {
                           />
                         )}
                       </td>
-                      <td className="px-2 py-2.5 font-medium text-indigo-700 truncate" onMouseEnter={(e) => entrarPrevia(e, 'Solicitante', item.solicitante)} onMouseMove={moverPrevia} onMouseLeave={sairPrevia}>{item.solicitante || <span className="text-slate-300">-</span>}</td>
-                      <td className="px-2 py-2.5 font-semibold text-slate-800 truncate">{item.cod_liberacao}</td>
-                      <td className="px-2 py-2.5 font-medium text-slate-700 truncate" onMouseEnter={(e) => entrarPrevia(e, 'Cliente', item.nome_cliente)} onMouseMove={moverPrevia} onMouseLeave={sairPrevia}>{item.nome_cliente || <span className="text-slate-300">-</span>}</td>
-                      <td className="px-2 py-2.5 font-medium text-slate-600 truncate">{item.rca}</td>
-                      <td className="px-2 py-2.5">{pilulaTipo(item.tipo_solicitacao)}</td>
-                      <td className="px-2 py-2.5 text-center">{badge(item)}</td>
-                      <td className="px-2 py-2.5 truncate text-slate-600" onMouseEnter={(e) => entrarPrevia(e, 'Observações', item.observacoes)} onMouseMove={moverPrevia} onMouseLeave={sairPrevia}>
-                        {item.observacoes || '-'}
-                      </td>
-                      <td className="px-2 py-2.5 truncate text-rose-600 font-medium" onMouseEnter={(e) => entrarPrevia(e, 'Motivo da recusa', item.motivo_recusa)} onMouseMove={moverPrevia} onMouseLeave={sairPrevia}>
-                        {item.motivo_recusa || '-'}
-                      </td>
-                      <td className="px-2 py-2.5 text-slate-500 whitespace-nowrap">{formatDataCurta(item.data_enviada)}</td>
-                      <td className="px-2 py-2.5 text-slate-500 whitespace-nowrap">{formatDataCurta(item.data_finalizada)}</td>
-                      <td className="px-2 py-2.5 text-center font-mono text-[11px] font-semibold text-slate-700">
-                        {calcularTempoConclusao(item.data_enviada, item.data_finalizada)}
-                      </td>
-                      <td className="px-2 py-2.5 text-center">{chipAnexos(item)}</td>
-                      <td className="px-2 py-2.5">
-                        <div className="flex items-center justify-center gap-1 flex-wrap">{acoesItem(item)}</div>
-                      </td>
+                      {ordemColunas.map((c) => {
+                        const col = DEF_COLUNAS[c];
+                        return (
+                          <td
+                            key={c}
+                            className={`px-2 py-2.5 ${col.centro ? 'text-center' : ''} ${col.td} ${colAlvo === c && colArrastada && colArrastada !== c ? 'bg-indigo-50/60' : ''}`}
+                            {...(col.props ? col.props(item) : {})}
+                          >
+                            {col.cel(item)}
+                          </td>
+                        );
+                      })}
                     </tr>
                   ))}
                 </tbody>
