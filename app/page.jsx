@@ -119,7 +119,34 @@ const MAX_SEGUNDOS_GRAVACAO = 300; // 5 minutos
 const formatarTempo = (seg) =>
   `${Math.floor(seg / 60)}:${String(seg % 60).padStart(2, '0')}`;
 
+// ===== Funcionário solicitante =====
+// Lista padrão (usada se a tabela "funcionarios" ainda não existir no Supabase).
+// Para incluir alguém novo sem mexer no código: insira o nome na tabela "funcionarios".
+const FUNCIONARIOS_PADRAO = [
+  'Adriano Valério',
+  'Jacqueline Calheiro',
+  'Fabrício Roderico',
+  'Anne Silva',
+  'Jennifer Santos'
+];
+const CHAVE_SOLICITANTE = 'sl_solicitante';
+
+const solicitanteSalvo = () => {
+  try {
+    return localStorage.getItem(CHAVE_SOLICITANTE) || '';
+  } catch (e) {
+    return '';
+  }
+};
+
+const lembrarSolicitante = (nome) => {
+  try {
+    if (nome) localStorage.setItem(CHAVE_SOLICITANTE, nome);
+  } catch (e) {}
+};
+
 const formVazio = () => ({
+  solicitante: typeof window !== 'undefined' ? solicitanteSalvo() : '',
   cod_liberacao: '',
   nome_cliente: '',
   rca: '',
@@ -239,6 +266,8 @@ export default function SolicitacoesApp() {
   const reqRef = useRef(0);
   const hojeAnteriorRef = useRef('');
   const [filtroStatus, setFiltroStatus] = useState('TODOS');
+  const [filtroSolicitante, setFiltroSolicitante] = useState(''); // '' = todos
+  const [funcionarios, setFuncionarios] = useState(FUNCIONARIOS_PADRAO);
   const [busca, setBusca] = useState('');
   const [modalAberto, setModalAberto] = useState(false);
   const [modalAprovacao, setModalAprovacao] = useState(null);
@@ -435,7 +464,7 @@ export default function SolicitacoesApp() {
     if (!document.hidden && document.hasFocus()) return; // já está olhando para o app
     if (payload.eventType === 'INSERT') {
       const n = payload.new;
-      mostrarAviso('Nova solicitação', `Pedido ${n.cod_liberacao} • RCA ${n.rca} • ${n.tipo_solicitacao}`, `sol-${n.id}`);
+      mostrarAviso('Nova solicitação', `${n.solicitante ? n.solicitante + ' • ' : ''}Pedido ${n.cod_liberacao} • RCA ${n.rca} • ${n.tipo_solicitacao}`, `sol-${n.id}`);
     } else if (payload.eventType === 'UPDATE') {
       const n = payload.new;
       const reaberta = ehReabertura(solicitacoesRef.current.find((i) => i.id === n.id), n);
@@ -445,6 +474,20 @@ export default function SolicitacoesApp() {
       mostrarAviso(`Solicitação ${n.cod_liberacao}`, reaberta ? rotulo : `Status: ${rotulo}`, `sol-${n.id}`);
     }
   };
+
+  // Carrega os funcionários da tabela "funcionarios" (se não existir, fica a lista padrão)
+  useEffect(() => {
+    supabase
+      .from('funcionarios')
+      .select('nome')
+      .eq('ativo', true)
+      .order('nome')
+      .then(({ data, error }) => {
+        if (!error && data && data.length) {
+          setFuncionarios(data.map((f) => String(f.nome || '').trim()).filter(Boolean));
+        }
+      });
+  }, []);
 
   // Carregar dados do período selecionado (padrão: apenas o dia de hoje)
   const fetchSolicitacoes = async () => {
@@ -530,6 +573,7 @@ export default function SolicitacoesApp() {
       setDataFim(hoje);
       setBusca('');
       setFiltroStatus('TODOS');
+      setFiltroSolicitante('');
       toast(`Novo dia: ${formatarDia(hoje)}. Os dias anteriores continuam disponíveis pela data.`, { icon: '🌅', duration: 6000 });
     }
   }, [hoje]);
@@ -694,6 +738,7 @@ export default function SolicitacoesApp() {
     nomeAutoRef.current = false;
     setNomeStatus('idle');
     setForm({
+      solicitante: item.solicitante || '',
       cod_liberacao: item.cod_liberacao || '',
       nome_cliente: item.nome_cliente || '',
       rca: item.rca || '',
@@ -1026,9 +1071,14 @@ export default function SolicitacoesApp() {
       toast.error('Pare a gravação antes de enviar.');
       return;
     }
+    const solicitante = (form.solicitante || '').trim();
     const cod = form.cod_liberacao.trim();
     const rca = form.rca.trim();
     const nome = form.nome_cliente.trim();
+    if (!solicitante) {
+      toast.error('Escolha o funcionário solicitante.');
+      return;
+    }
     if (!/^\d{6}$/.test(cod)) {
       toast.error(`O código do cliente deve ter exatamente ${CODIGO_DIGITOS} dígitos.`);
       return;
@@ -1053,6 +1103,7 @@ export default function SolicitacoesApp() {
       tom: 'indigo',
       textoConfirmar: editandoId ? 'Salvar' : 'Enviar',
       detalhes: [
+        ['Solicitante', solicitante],
         ['Cód. cliente', cod],
         ['Cliente', nome],
         ['RCA', rca],
@@ -1060,12 +1111,13 @@ export default function SolicitacoesApp() {
         ['Anexos', String(qtdAnexos)],
         ...(clienteNovo ? [['Cliente novo', 'será cadastrado na lista']] : [])
       ],
-      onConfirm: () => enviarSolicitacao(cod, rca, nome, clienteNovo)
+      onConfirm: () => enviarSolicitacao(cod, rca, nome, clienteNovo, solicitante)
     });
   };
 
   // Criar ou salvar edição (com anexos)
-  const enviarSolicitacao = async (cod, rca, nome, clienteNovo = false) => {
+  const enviarSolicitacao = async (cod, rca, nome, clienteNovo = false, solicitante = '') => {
+    lembrarSolicitante(solicitante); // próxima solicitação já vem com o mesmo nome neste aparelho
     setEnviando(true);
     const toastId = toast.loading(
       novosArquivos.length ? 'Enviando anexos...' : editandoId ? 'Salvando alterações...' : 'Enviando solicitação...'
@@ -1086,6 +1138,7 @@ export default function SolicitacoesApp() {
       const { data, error } = await supabase
         .from('solicitacoes')
         .update({
+          solicitante,
           cod_liberacao: cod,
           nome_cliente: nome,
           rca,
@@ -1098,7 +1151,7 @@ export default function SolicitacoesApp() {
 
       if (error) {
         await removerArquivos(enviados.map((a) => a.path));
-        toast.error('Erro ao salvar: ' + error.message, { id: toastId });
+        toast.error('Erro ao salvar: ' + error.message + (/solicitante/i.test(error.message) ? ' (rode o arquivo solicitante.sql no Supabase)' : ''), { id: toastId, duration: 7000 });
       } else if (!data || data.length === 0) {
         await removerArquivos(enviados.map((a) => a.path));
         toast.error('Não foi possível salvar. Verifique a permissão de UPDATE (RLS) da tabela.', { id: toastId });
@@ -1116,6 +1169,7 @@ export default function SolicitacoesApp() {
     // --- Criação ---
     const { error } = await supabase.from('solicitacoes').insert([
       {
+        solicitante,
         cod_liberacao: cod,
         nome_cliente: nome,
         rca,
@@ -1129,7 +1183,7 @@ export default function SolicitacoesApp() {
 
     if (error) {
       await removerArquivos(enviados.map((a) => a.path));
-      toast.error('Erro ao enviar: ' + error.message, { id: toastId });
+      toast.error('Erro ao enviar: ' + error.message + (/solicitante/i.test(error.message) ? ' (rode o arquivo solicitante.sql no Supabase)' : ''), { id: toastId, duration: 7000 });
     } else {
       if (clienteNovo) await cadastrarCliente(cod, nome, true);
       toast.success('Solicitação enviada com sucesso!', { id: toastId });
@@ -1148,6 +1202,7 @@ export default function SolicitacoesApp() {
       tom: 'rose',
       textoConfirmar: 'Excluir',
       detalhes: [
+        ['Solicitante', item.solicitante],
         ['Cód. cliente', item.cod_liberacao],
         ['Cliente', item.nome_cliente],
         ['RCA', item.rca],
@@ -1193,6 +1248,7 @@ export default function SolicitacoesApp() {
       tom: statusAprovado ? 'emerald' : 'rose',
       textoConfirmar: statusAprovado ? 'Aprovar (SIM)' : 'Recusar (NÃO)',
       detalhes: [
+        ['Solicitante', modalAprovacao.solicitante],
         ['Cód. cliente', modalAprovacao.cod_liberacao],
         ['Cliente', modalAprovacao.nome_cliente],
         ['RCA', modalAprovacao.rca],
@@ -1314,8 +1370,9 @@ export default function SolicitacoesApp() {
 
   // Exportar para CSV
   const exportToCSV = () => {
-    const headers = ['Cód. Cliente', 'Cliente', 'RCA', 'Tipo de Solicitação', 'Aprovado (SIM/NÃO)', 'Observações', 'Motivo Recusa', 'Data Enviada', 'Data Finalizada', 'Tempo Conclusão', 'Qtd. Anexos'];
+    const headers = ['Solicitante', 'Cód. Cliente', 'Cliente', 'RCA', 'Tipo de Solicitação', 'Aprovado (SIM/NÃO)', 'Observações', 'Motivo Recusa', 'Data Enviada', 'Data Finalizada', 'Tempo Conclusão', 'Qtd. Anexos'];
     const rows = solicitacoesFiltradas.map(s => [
+      `"${(s.solicitante || '').replace(/"/g, '""')}"`,
       s.cod_liberacao,
       `"${(s.nome_cliente || '').replace(/"/g, '""')}"`,
       s.rca,
@@ -1353,6 +1410,8 @@ export default function SolicitacoesApp() {
     return solicitacoes.filter((item) => {
       if (filtroStatus !== 'TODOS' && item.status !== filtroStatus) return false;
 
+      if (filtroSolicitante && (item.solicitante || '') !== filtroSolicitante) return false;
+
       if (!noPeriodo(item, dataInicio, dataFim)) return false;
 
       if (termos.length === 0) return true;
@@ -1361,6 +1420,7 @@ export default function SolicitacoesApp() {
         item.status === 'SIM' ? 'sim aprovado' : item.status === 'NAO' ? 'nao recusado' : 'pendente em analise';
       const alvo = normalizar(
         [
+          item.solicitante,
           item.cod_liberacao,
           item.nome_cliente,
           item.rca,
@@ -1374,7 +1434,7 @@ export default function SolicitacoesApp() {
       // Todos os termos digitados precisam aparecer (em qualquer campo)
       return termos.every((termo) => alvo.includes(termo));
     }).sort((a, b) => ultimaMovimentacao(b) - ultimaMovimentacao(a)); // reabertos no topo
-  }, [solicitacoes, filtroStatus, busca, dataInicio, dataFim]);
+  }, [solicitacoes, filtroStatus, filtroSolicitante, busca, dataInicio, dataFim]);
 
   // Seleção em lote: só entram as que o perfil pode alterar e que estão na tela (filtro, data e busca)
   const selecionaveis = useMemo(
@@ -1459,12 +1519,20 @@ export default function SolicitacoesApp() {
   };
 
   const visaoPadrao = seguindoHoje && dataInicio === hoje && dataFim === hoje;
-  const temFiltroAtivo = Boolean(busca || filtroStatus !== 'TODOS' || !visaoPadrao);
+  const temFiltroAtivo = Boolean(busca || filtroStatus !== 'TODOS' || filtroSolicitante || !visaoPadrao);
+
+  // Opções do filtro: lista de funcionários + nomes que já aparecem nas solicitações
+  const opcoesSolicitante = useMemo(() => {
+    const nomes = new Set(funcionarios);
+    solicitacoes.forEach((i) => { if (i.solicitante) nomes.add(i.solicitante); });
+    return [...nomes].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  }, [funcionarios, solicitacoes]);
 
   // Volta para a visão limpa do dia
   const limparFiltros = () => {
     setBusca('');
     setFiltroStatus('TODOS');
+    setFiltroSolicitante('');
     setSeguindoHoje(true);
     setDataInicio(hoje);
     setDataFim(hoje);
@@ -1757,7 +1825,7 @@ export default function SolicitacoesApp() {
               <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
                 type="text"
-                placeholder="Buscar por cliente, cód., RCA, tipo, observação..."
+                placeholder="Buscar por solicitante, cliente, cód., RCA, tipo..."
                 value={busca}
                 onChange={(e) => setBusca(e.target.value)}
                 className="w-full pl-9 pr-9 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
@@ -1792,6 +1860,20 @@ export default function SolicitacoesApp() {
           </div>
 
           <div className="flex flex-wrap items-end gap-3 pt-3 border-t border-slate-100">
+            <div className="w-full sm:w-auto sm:min-w-[11rem]">
+              <label htmlFor="filtro-solicitante" className="block text-xs font-semibold text-slate-600 mb-1">Solicitante</label>
+              <select
+                id="filtro-solicitante"
+                value={filtroSolicitante}
+                onChange={(e) => setFiltroSolicitante(e.target.value)}
+                className={`w-full border rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 ${filtroSolicitante ? 'border-indigo-300 bg-indigo-50/60 text-indigo-800 font-semibold' : 'border-slate-200'}`}
+              >
+                <option value="">Todos os funcionários</option>
+                {opcoesSolicitante.map((n) => (
+                  <option key={n} value={n}>{n}</option>
+                ))}
+              </select>
+            </div>
             <div className="flex-1 min-w-[8.5rem] sm:flex-none">
               <label className="block text-xs font-semibold text-slate-600 mb-1">Enviada de</label>
               <input
@@ -1925,15 +2007,16 @@ export default function SolicitacoesApp() {
               <table className="w-full table-fixed text-left border-collapse text-xs">
                 <colgroup>
                   <col style={{ width: '3%' }} />
-                  <col style={{ width: '6%' }} />
-                  <col style={{ width: '10%' }} />
-                  <col style={{ width: '5%' }} />
-                  <col style={{ width: '14%' }} />
                   <col style={{ width: '8%' }} />
+                  <col style={{ width: '5%' }} />
                   <col style={{ width: '10%' }} />
+                  <col style={{ width: '4%' }} />
+                  <col style={{ width: '13%' }} />
+                  <col style={{ width: '7%' }} />
                   <col style={{ width: '9%' }} />
                   <col style={{ width: '8%' }} />
-                  <col style={{ width: '8%' }} />
+                  <col style={{ width: '7%' }} />
+                  <col style={{ width: '7%' }} />
                   <col style={{ width: '6%' }} />
                   <col style={{ width: '4%' }} />
                   <col style={{ width: '9%' }} />
@@ -1952,6 +2035,7 @@ export default function SolicitacoesApp() {
                         className="w-4 h-4 accent-indigo-600 cursor-pointer align-middle"
                       />
                     </th>
+                    <th className="px-2 py-2.5">Solicitante</th>
                     <th className="px-2 py-2.5">Cód.</th>
                     <th className="px-2 py-2.5">Cliente</th>
                     <th className="px-2 py-2.5">RCA</th>
@@ -1985,6 +2069,7 @@ export default function SolicitacoesApp() {
                           />
                         )}
                       </td>
+                      <td className="px-2 py-2.5 font-medium text-indigo-700 truncate" onMouseEnter={(e) => entrarPrevia(e, 'Solicitante', item.solicitante)} onMouseMove={moverPrevia} onMouseLeave={sairPrevia}>{item.solicitante || <span className="text-slate-300">-</span>}</td>
                       <td className="px-2 py-2.5 font-semibold text-slate-800 truncate">{item.cod_liberacao}</td>
                       <td className="px-2 py-2.5 font-medium text-slate-700 truncate" onMouseEnter={(e) => entrarPrevia(e, 'Cliente', item.nome_cliente)} onMouseMove={moverPrevia} onMouseLeave={sairPrevia}>{item.nome_cliente || <span className="text-slate-300">-</span>}</td>
                       <td className="px-2 py-2.5 font-medium text-slate-600 truncate">{item.rca}</td>
@@ -2035,6 +2120,11 @@ export default function SolicitacoesApp() {
                         {item.nome_cliente || 'Cliente não informado'}
                       </p>
                       <p className="text-xs text-slate-500 mt-0.5">Cód. {item.cod_liberacao} · RCA {item.rca}</p>
+                      {item.solicitante && (
+                        <p className="text-xs text-indigo-700 font-medium mt-0.5 flex items-center gap-1 min-w-0">
+                          <User className="w-3.5 h-3.5 shrink-0" /> <span className="truncate">{item.solicitante}</span>
+                        </p>
+                      )}
                     </div>
                     {badge(item)}
                   </div>
@@ -2220,6 +2310,28 @@ export default function SolicitacoesApp() {
             </h2>
 
             <form onSubmit={handleSubmit} className="space-y-4">
+              <div>
+                <label htmlFor="solicitante" className="block text-xs font-semibold text-slate-600 mb-1">Funcionário solicitante *</label>
+                <select
+                  id="solicitante"
+                  required
+                  value={form.solicitante}
+                  onChange={(e) => setForm({ ...form, solicitante: e.target.value })}
+                  className={`w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none ${form.solicitante ? 'border-slate-300' : 'border-amber-300 text-slate-500'}`}
+                >
+                  <option value="" disabled>Escolha quem está pedindo</option>
+                  {(form.solicitante && !funcionarios.includes(form.solicitante)
+                    ? [form.solicitante, ...funcionarios]
+                    : funcionarios
+                  ).map((n) => (
+                    <option key={n} value={n}>{n}</option>
+                  ))}
+                </select>
+                {!editandoId && form.solicitante && (
+                  <p className="text-[11px] text-slate-400 mt-1">Fica lembrado neste aparelho para as próximas solicitações.</p>
+                )}
+              </div>
+
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <label htmlFor="cod-cliente" className="block text-xs font-semibold text-slate-600">Código do cliente (6 dígitos) *</label>
@@ -2476,7 +2588,7 @@ export default function SolicitacoesApp() {
             {modalAprovacao.nome_cliente && (
               <p className="text-sm font-semibold text-slate-700 mb-1 break-words">{modalAprovacao.nome_cliente}</p>
             )}
-            <p className="text-xs text-slate-500 mb-2">RCA: {modalAprovacao.rca}</p>
+            <p className="text-xs text-slate-500 mb-2">RCA: {modalAprovacao.rca}{modalAprovacao.solicitante ? ` · Solicitante: ${modalAprovacao.solicitante}` : ''}</p>
             <div className="mb-4">{pilulaTipo(modalAprovacao.tipo_solicitacao)}</div>
 
             {modalAprovacao.observacoes && (
@@ -2561,7 +2673,7 @@ export default function SolicitacoesApp() {
             {modalDetalhe.nome_cliente && (
               <p className="text-sm font-semibold text-slate-700 mb-1 break-words">{modalDetalhe.nome_cliente}</p>
             )}
-            <p className="text-xs text-slate-500 mb-2">RCA: {modalDetalhe.rca}</p>
+            <p className="text-xs text-slate-500 mb-2">RCA: {modalDetalhe.rca}{modalDetalhe.solicitante ? ` · Solicitante: ${modalDetalhe.solicitante}` : ''}</p>
             <div className="mb-3 flex items-center gap-2 flex-wrap">{pilulaTipo(modalDetalhe.tipo_solicitacao)} {badge(modalDetalhe)}</div>
             {modalDetalhe.observacoes && (
               <div className="bg-slate-50 p-3 rounded-lg text-xs text-slate-700 border border-slate-200 mb-3">
