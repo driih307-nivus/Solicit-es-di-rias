@@ -9,7 +9,7 @@ import {
   Clock, CheckCircle2, XCircle, AlertCircle, Plus, Search,
   Download, RefreshCw, UserCheck, Send, MessageSquare, Shield, User,
   Pencil, Trash2, X, CalendarDays,
-  Paperclip, FileText, Music, Image as ImageIcon, Video, ExternalLink, Mic, Square, Eye, Bell, BellOff, Sun, Moon, RotateCcw, GripVertical, Printer
+  Paperclip, FileText, Music, Image as ImageIcon, Video, ExternalLink, Mic, Square, Eye, Bell, BellOff, Sun, Moon, RotateCcw, GripVertical, Printer, Timer, Hourglass, TrendingDown, TrendingUp
 } from 'lucide-react';
 
 const TIPOS_SOLICITACAO = [
@@ -193,6 +193,17 @@ const noPeriodo = (item, ini, fim) => {
   return dentro(item.data_enviada) || dentro(item.reaberta_em);
 };
 
+// Tempo em minutos -> "18 min", "1h 05min", "<1 min"
+const fmtMinutos = (ms) => {
+  if (ms == null || !isFinite(ms)) return '—';
+  const m = Math.round(ms / 60000);
+  if (m < 1) return '<1 min';
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ${String(m % 60).padStart(2, '0')}min`;
+  return `${Math.floor(h / 24)}d ${h % 24}h`;
+};
+
 // Ordem da lista: o que foi reaberto sobe para o topo (pela hora da reabertura)
 const ultimaMovimentacao = (i) => new Date(i.reaberta_em || i.data_enviada).getTime() || 0;
 
@@ -286,6 +297,9 @@ function ConfirmarModal({ cfg, onClose }) {
 
 export default function SolicitacoesApp() {
   const [solicitacoes, setSolicitacoes] = useState([]);
+  // tempo de resposta: respondidas dos 7 dias anteriores a hoje (comparação) e relógio do "pendente há mais tempo"
+  const [respostas7d, setRespostas7d] = useState([]);
+  const [agoraTempo, setAgoraTempo] = useState(() => Date.now());
   const [loading, setLoading] = useState(true);
   const perfil = PERFIL; // 'SOLICITANTE' ou 'APROVADOR' (definido pelo link)
   const [pronto, setPronto] = useState(false);
@@ -1460,6 +1474,50 @@ export default function SolicitacoesApp() {
     document.body.removeChild(link);
   };
 
+  // ===== Tempo médio de resposta (do envio até aprovar/recusar) =====
+  useEffect(() => {
+    let vivo = true;
+    const carregar7d = async () => {
+      const fim = new Date(`${diaDeHoje()}T00:00:00`);
+      const ini = new Date(fim.getTime() - 7 * 86400000);
+      const { data } = await supabase
+        .from('solicitacoes')
+        .select('data_enviada,data_finalizada,solicitante')
+        .gte('data_enviada', ini.toISOString())
+        .lt('data_enviada', fim.toISOString())
+        .not('data_finalizada', 'is', null)
+        .limit(5000);
+      if (vivo) setRespostas7d(data || []);
+    };
+    carregar7d();
+    const t1 = setInterval(carregar7d, 30 * 60000);
+    const t2 = setInterval(() => setAgoraTempo(Date.now()), 30000);
+    return () => { vivo = false; clearInterval(t1); clearInterval(t2); };
+  }, []);
+
+  const tempoResposta = useMemo(() => {
+    const doSol = (i) => !filtroSolicitante || (i.solicitante || '') === filtroSolicitante;
+    const base = solicitacoes.filter((i) => noPeriodo(i, dataInicio, dataFim) && doSol(i));
+    const ms = base
+      .filter((i) => i.data_enviada && i.data_finalizada && i.status !== 'PENDENTE')
+      .map((i) => new Date(i.data_finalizada) - new Date(i.data_enviada))
+      .filter((v) => v >= 0);
+    const media = ms.length ? ms.reduce((a, b) => a + b, 0) / ms.length : null;
+    const ms7 = respostas7d.filter(doSol).map((i) => new Date(i.data_finalizada) - new Date(i.data_enviada)).filter((v) => v >= 0);
+    const media7 = ms7.length ? ms7.reduce((a, b) => a + b, 0) / ms7.length : null;
+    const pend = base.filter((i) => i.status === 'PENDENTE').sort((a, b) => ultimaMovimentacao(a) - ultimaMovimentacao(b))[0] || null;
+    return {
+      n: ms.length,
+      media,
+      min: ms.length ? Math.min(...ms) : null,
+      max: ms.length ? Math.max(...ms) : null,
+      ate15: ms.length ? Math.round(ms.filter((v) => v <= 15 * 60000).length / ms.length * 100) : null,
+      media7,
+      pend,
+      pendMs: pend ? Math.max(0, agoraTempo - ultimaMovimentacao(pend)) : null
+    };
+  }, [solicitacoes, dataInicio, dataFim, filtroSolicitante, respostas7d, agoraTempo]);
+
   // ===== Relatório para imprimir / salvar em PDF (usa o que está na tela: período, status, solicitante e busca) =====
   const imprimirRelatorio = () => {
     const lista = solicitacoesFiltradas;
@@ -2015,6 +2073,39 @@ export default function SolicitacoesApp() {
               </button>
             );
           })}
+        </div>
+
+        {/* TEMPO MÉDIO DE RESPOSTA (solicitante e aprovador) */}
+        <div className="tmr fade-up">
+          <div className="tmr-principal">
+            <span className="tmr-relogio"><Timer className="w-6 h-6" /></span>
+            <div className="min-w-0">
+              <p className="tmr-lab">Tempo médio de resposta</p>
+              <p className="tmr-val">{tempoResposta.n ? fmtMinutos(tempoResposta.media) : '—'}</p>
+              <p className="tmr-sub">
+                {rotuloPeriodo}{filtroSolicitante ? ` · ${filtroSolicitante}` : ''} · {tempoResposta.n} respondida{tempoResposta.n === 1 ? '' : 's'}
+              </p>
+              {tempoResposta.n > 0 && tempoResposta.media7 != null && Math.abs(tempoResposta.media - tempoResposta.media7) >= 60000 && (
+                <span className={`tmr-cmp ${tempoResposta.media < tempoResposta.media7 ? 'tmr-bom' : 'tmr-ruim'}`}>
+                  {tempoResposta.media < tempoResposta.media7 ? <TrendingDown className="w-3.5 h-3.5" /> : <TrendingUp className="w-3.5 h-3.5" />}
+                  {fmtMinutos(Math.abs(tempoResposta.media - tempoResposta.media7))} {tempoResposta.media < tempoResposta.media7 ? 'mais rápido' : 'mais lento'} que os últimos 7 dias ({fmtMinutos(tempoResposta.media7)})
+                </span>
+              )}
+            </div>
+          </div>
+          {tempoResposta.n > 0 && (
+            <div className="tmr-mini">
+              <div className="tmr-m"><p className="tmr-ma">Mais rápida</p><p className="tmr-mb tmr-verde">{fmtMinutos(tempoResposta.min)}</p></div>
+              <div className="tmr-m"><p className="tmr-ma">Mais demorada</p><p className="tmr-mb tmr-vermelho">{fmtMinutos(tempoResposta.max)}</p></div>
+              <div className="tmr-m hidden sm:block"><p className="tmr-ma">Até 15 min</p><p className="tmr-mb">{tempoResposta.ate15}%</p></div>
+            </div>
+          )}
+          {tempoResposta.pend && (
+            <button type="button" className="tmr-espera" onClick={() => setFiltroStatus('PENDENTE')} title="Ver as pendentes">
+              <Hourglass className="w-4 h-4 shrink-0" />
+              <span>Pendente há mais tempo<br /><b>{fmtMinutos(tempoResposta.pendMs)}</b> · pedido {tempoResposta.pend.cod_liberacao}</span>
+            </button>
+          )}
         </div>
 
         {/* PENDENTES DE DIAS ANTERIORES */}
