@@ -14,7 +14,8 @@ import {
 } from 'lucide-react';
 
 const TIPOS_SOLICITACAO = [
-  'Liberar Recebidos comprovantes',
+  'Liberar comprovantes recebidos - 1203',
+  'Liberar pedido pendente/bloqueado - 336',
   'Aumento de limite',
   'Alteração de prazo',
   'Antecipação de boleto',
@@ -24,7 +25,9 @@ const TIPOS_SOLICITACAO = [
 // Cor de cada tipo de solicitação (legenda + identificação nas linhas)
 // Evita verde/vermelho/âmbar, que já indicam o status.
 const TIPO_CORES = {
-  'Liberar Recebidos comprovantes': { dot: 'bg-sky-500',     pill: 'bg-sky-100 text-sky-800 ring-sky-200',             borda: 'border-l-sky-500' },
+  'Liberar comprovantes recebidos - 1203':   { dot: 'bg-sky-500',    pill: 'bg-sky-100 text-sky-800 ring-sky-200',          borda: 'border-l-sky-500' },
+  'Liberar pedido pendente/bloqueado - 336': { dot: 'bg-indigo-500', pill: 'bg-indigo-100 text-indigo-800 ring-indigo-200', borda: 'border-l-indigo-500' },
+  'Liberar Recebidos comprovantes':          { dot: 'bg-sky-500',    pill: 'bg-sky-100 text-sky-800 ring-sky-200',          borda: 'border-l-sky-500' }, // nome antigo
   'Aumento de limite':              { dot: 'bg-violet-500',  pill: 'bg-violet-100 text-violet-800 ring-violet-200',    borda: 'border-l-violet-500' },
   'Alteração de prazo':             { dot: 'bg-fuchsia-500', pill: 'bg-fuchsia-100 text-fuchsia-800 ring-fuchsia-200', borda: 'border-l-fuchsia-500' },
   'Antecipação de boleto':          { dot: 'bg-orange-500',  pill: 'bg-orange-100 text-orange-800 ring-orange-200',    borda: 'border-l-orange-500' },
@@ -1252,7 +1255,7 @@ export default function SolicitacoesApp() {
 
       if (error) {
         await removerArquivos(enviados.map((a) => a.path));
-        toast.error('Erro ao salvar: ' + error.message + (/solicitante/i.test(error.message) ? ' (rode o arquivo solicitante.sql no Supabase)' : ''), { id: toastId, duration: 7000 });
+        toast.error('Erro ao salvar: ' + error.message + (/solicitante/i.test(error.message) ? ' (rode o arquivo solicitante.sql no Supabase)' : /tipo_solicitacao/i.test(error.message) ? ' (rode o arquivo tipos-liberacao.sql no Supabase)' : ''), { id: toastId, duration: 7000 });
       } else if (!data || data.length === 0) {
         await removerArquivos(enviados.map((a) => a.path));
         toast.error('Não foi possível salvar. Verifique a permissão de UPDATE (RLS) da tabela.', { id: toastId });
@@ -1284,7 +1287,7 @@ export default function SolicitacoesApp() {
 
     if (error) {
       await removerArquivos(enviados.map((a) => a.path));
-      toast.error('Erro ao enviar: ' + error.message + (/solicitante/i.test(error.message) ? ' (rode o arquivo solicitante.sql no Supabase)' : ''), { id: toastId, duration: 7000 });
+      toast.error('Erro ao enviar: ' + error.message + (/solicitante/i.test(error.message) ? ' (rode o arquivo solicitante.sql no Supabase)' : /tipo_solicitacao/i.test(error.message) ? ' (rode o arquivo tipos-liberacao.sql no Supabase)' : ''), { id: toastId, duration: 7000 });
     } else {
       if (clienteNovo) await cadastrarCliente(cod, nome, true);
       toast.success('Solicitação enviada com sucesso!', { id: toastId });
