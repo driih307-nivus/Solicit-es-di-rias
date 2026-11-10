@@ -2073,27 +2073,46 @@ export default function SolicitacoesApp() {
               </button>
             );
           })}
-          {/* Tempo médio de resposta: mesmo padrão dos cartões acima (detalhes ao passar o mouse) */}
-          <div
-            className="col-span-2 md:col-span-1 bg-white p-4 rounded-xl border border-indigo-200 bg-indigo-50/30 shadow-sm flex items-center justify-between w-full text-left"
-            title={tempoResposta.n
-              ? `${tempoResposta.n} respondida(s) · mais rápida ${fmtMinutos(tempoResposta.min)} · mais demorada ${fmtMinutos(tempoResposta.max)} · ${tempoResposta.ate15}% em até 15 min`
-                + (tempoResposta.media7 != null ? ` · últimos 7 dias: ${fmtMinutos(tempoResposta.media7)}` : '')
-                + (tempoResposta.pend ? ` · pendente há mais tempo: ${fmtMinutos(tempoResposta.pendMs)} (pedido ${tempoResposta.pend.cod_liberacao})` : '')
-              : 'Ainda sem respostas no período'}
-          >
-            <div className="min-w-0">
-              <p className="text-xs font-medium text-indigo-700">Tempo médio de resposta</p>
-              <p className="text-xl font-bold text-indigo-800">{tempoResposta.n ? fmtMinutos(tempoResposta.media) : '—'}</p>
-              {tempoResposta.n > 0 && tempoResposta.media7 != null && Math.abs(tempoResposta.media - tempoResposta.media7) >= 60000 && (
-                <p className={`text-[11px] font-semibold flex items-center gap-1 ${tempoResposta.media < tempoResposta.media7 ? 'text-emerald-700' : 'text-rose-700'}`}>
-                  {tempoResposta.media < tempoResposta.media7 ? <TrendingDown className="w-3 h-3" /> : <TrendingUp className="w-3 h-3" />}
-                  {fmtMinutos(Math.abs(tempoResposta.media - tempoResposta.media7))} {tempoResposta.media < tempoResposta.media7 ? 'mais rápido' : 'mais lento'} que 7 dias
-                </p>
-              )}
-            </div>
-            <span className="p-2 rounded-lg bg-indigo-100 text-indigo-600"><Timer className="w-4 h-4" /></span>
-          </div>
+          {/* Tempo médio de resposta: cor pela faixa (até 10 min verde, 10–20 azul, 20–30 laranja, acima de 30 vermelho pulsando) */}
+          {(() => {
+            const t = tempoResposta;
+            const min = t.n ? t.media / 60000 : null;
+            const f = min == null
+              ? { card: 'border-slate-200', rot: 'text-slate-500', num: 'text-slate-800', icone: 'bg-slate-100 text-slate-600', emoji: '⏱️', txt: 'sem respostas ainda' }
+              : min <= 10 ? { card: 'border-emerald-200 bg-emerald-50/30', rot: 'text-emerald-700', num: 'text-emerald-800', icone: 'bg-emerald-100 text-emerald-600', emoji: '🚀', txt: 'excelente' }
+              : min <= 20 ? { card: 'border-sky-200 bg-sky-50/30', rot: 'text-sky-700', num: 'text-sky-800', icone: 'bg-sky-100 text-sky-600', emoji: '⚡', txt: 'bom' }
+              : min <= 30 ? { card: 'border-orange-200 bg-orange-50/30', rot: 'text-orange-700', num: 'text-orange-800', icone: 'bg-orange-100 text-orange-600', emoji: '⏳', txt: 'atenção' }
+              : { card: 'border-rose-200 bg-rose-50/30 tmr-pulsa', rot: 'text-rose-700', num: 'text-rose-800', icone: 'bg-rose-100 text-rose-600', emoji: '🐢', txt: 'demorado' };
+            const melhor = t.media7 != null && t.n && t.media < t.media7;
+            return (
+              <div className={`col-span-2 md:col-span-1 bg-white p-4 rounded-xl border ${f.card} shadow-sm w-full text-left space-y-1.5`}>
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className={`text-xs font-medium ${f.rot}`}>Tempo médio de resposta</p>
+                    <p className={`text-xl font-bold ${f.num}`}>{t.n ? fmtMinutos(t.media) : '—'} <span className="text-base" title={f.txt}>{f.emoji}</span></p>
+                  </div>
+                  <span className={`p-2 rounded-lg ${f.icone}`}><Timer className="w-4 h-4" /></span>
+                </div>
+                {t.n > 0 && (
+                  <div className="text-[11px] leading-snug text-slate-600 space-y-0.5">
+                    <p>⚡ Mais rápida <b>{fmtMinutos(t.min)}</b> · 🐢 Mais demorada <b>{fmtMinutos(t.max)}</b></p>
+                    <p>✅ <b>{t.ate15}%</b> em até 15 min · 📋 {t.n} respondida{t.n === 1 ? '' : 's'}</p>
+                    {t.media7 != null && Math.abs(t.media - t.media7) >= 60000 && (
+                      <p className={`font-semibold ${melhor ? 'text-emerald-700' : 'text-rose-700'}`}>
+                        {melhor ? '📉' : '📈'} {fmtMinutos(Math.abs(t.media - t.media7))} {melhor ? 'mais rápido' : 'mais lento'} que os últimos 7 dias ({fmtMinutos(t.media7)})
+                      </p>
+                    )}
+                  </div>
+                )}
+                {t.pend && (
+                  <button type="button" onClick={() => setFiltroStatus('PENDENTE')} title="Ver as pendentes"
+                    className="w-full text-left text-[11px] font-semibold rounded-lg px-2 py-1 bg-amber-50 border border-amber-200 text-amber-800">
+                    ⌛ Pendente há <b>{fmtMinutos(t.pendMs)}</b> · pedido {t.pend.cod_liberacao}
+                  </button>
+                )}
+              </div>
+            );
+          })()}
         </div>
 
         {/* PENDENTES DE DIAS ANTERIORES */}
