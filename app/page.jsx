@@ -9,7 +9,7 @@ import {
   Clock, CheckCircle2, XCircle, AlertCircle, Plus, Search,
   Download, RefreshCw, UserCheck, Send, MessageSquare, Shield, User,
   Pencil, Trash2, X, CalendarDays,
-  Paperclip, FileText, Music, Image as ImageIcon, Video, ExternalLink, Mic, Square, Eye, Bell, BellOff, Sun, Moon, RotateCcw, GripVertical, Printer, Timer, Hourglass, TrendingDown, TrendingUp
+  Paperclip, FileText, Music, Image as ImageIcon, Video, ExternalLink, Mic, Square, Eye, Bell, BellOff, Sun, Moon, RotateCcw, GripVertical, Printer, Timer, TrendingDown, TrendingUp
 } from 'lucide-react';
 
 const TIPOS_SOLICITACAO = [
@@ -2044,7 +2044,7 @@ export default function SolicitacoesApp() {
         </div>
 
         {/* ESTATÍSTICAS RÁPIDAS (clique em um cartão para filtrar por status) */}
-        <div className="stagger grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="stagger grid grid-cols-2 md:grid-cols-5 gap-3">
           {[
             { st: 'TODOS', rotulo: 'Total do período', n: doPeriodo.length, Icone: RefreshCw,
               card: 'border-slate-200', rot: 'text-slate-500', num: 'text-slate-800', icone: 'bg-slate-100 text-slate-600', ring: 'ring-indigo-500' },
@@ -2073,39 +2073,27 @@ export default function SolicitacoesApp() {
               </button>
             );
           })}
-        </div>
-
-        {/* TEMPO MÉDIO DE RESPOSTA (solicitante e aprovador) */}
-        <div className="tmr fade-up">
-          <div className="tmr-principal">
-            <span className="tmr-relogio"><Timer className="w-6 h-6" /></span>
+          {/* Tempo médio de resposta: mesmo padrão dos cartões acima (detalhes ao passar o mouse) */}
+          <div
+            className="col-span-2 md:col-span-1 bg-white p-4 rounded-xl border border-indigo-200 bg-indigo-50/30 shadow-sm flex items-center justify-between w-full text-left"
+            title={tempoResposta.n
+              ? `${tempoResposta.n} respondida(s) · mais rápida ${fmtMinutos(tempoResposta.min)} · mais demorada ${fmtMinutos(tempoResposta.max)} · ${tempoResposta.ate15}% em até 15 min`
+                + (tempoResposta.media7 != null ? ` · últimos 7 dias: ${fmtMinutos(tempoResposta.media7)}` : '')
+                + (tempoResposta.pend ? ` · pendente há mais tempo: ${fmtMinutos(tempoResposta.pendMs)} (pedido ${tempoResposta.pend.cod_liberacao})` : '')
+              : 'Ainda sem respostas no período'}
+          >
             <div className="min-w-0">
-              <p className="tmr-lab">Tempo médio de resposta</p>
-              <p className="tmr-val">{tempoResposta.n ? fmtMinutos(tempoResposta.media) : '—'}</p>
-              <p className="tmr-sub">
-                {rotuloPeriodo}{filtroSolicitante ? ` · ${filtroSolicitante}` : ''} · {tempoResposta.n} respondida{tempoResposta.n === 1 ? '' : 's'}
-              </p>
+              <p className="text-xs font-medium text-indigo-700">Tempo médio de resposta</p>
+              <p className="text-xl font-bold text-indigo-800">{tempoResposta.n ? fmtMinutos(tempoResposta.media) : '—'}</p>
               {tempoResposta.n > 0 && tempoResposta.media7 != null && Math.abs(tempoResposta.media - tempoResposta.media7) >= 60000 && (
-                <span className={`tmr-cmp ${tempoResposta.media < tempoResposta.media7 ? 'tmr-bom' : 'tmr-ruim'}`}>
-                  {tempoResposta.media < tempoResposta.media7 ? <TrendingDown className="w-3.5 h-3.5" /> : <TrendingUp className="w-3.5 h-3.5" />}
-                  {fmtMinutos(Math.abs(tempoResposta.media - tempoResposta.media7))} {tempoResposta.media < tempoResposta.media7 ? 'mais rápido' : 'mais lento'} que os últimos 7 dias ({fmtMinutos(tempoResposta.media7)})
-                </span>
+                <p className={`text-[11px] font-semibold flex items-center gap-1 ${tempoResposta.media < tempoResposta.media7 ? 'text-emerald-700' : 'text-rose-700'}`}>
+                  {tempoResposta.media < tempoResposta.media7 ? <TrendingDown className="w-3 h-3" /> : <TrendingUp className="w-3 h-3" />}
+                  {fmtMinutos(Math.abs(tempoResposta.media - tempoResposta.media7))} {tempoResposta.media < tempoResposta.media7 ? 'mais rápido' : 'mais lento'} que 7 dias
+                </p>
               )}
             </div>
+            <span className="p-2 rounded-lg bg-indigo-100 text-indigo-600"><Timer className="w-4 h-4" /></span>
           </div>
-          {tempoResposta.n > 0 && (
-            <div className="tmr-mini">
-              <div className="tmr-m"><p className="tmr-ma">Mais rápida</p><p className="tmr-mb tmr-verde">{fmtMinutos(tempoResposta.min)}</p></div>
-              <div className="tmr-m"><p className="tmr-ma">Mais demorada</p><p className="tmr-mb tmr-vermelho">{fmtMinutos(tempoResposta.max)}</p></div>
-              <div className="tmr-m hidden sm:block"><p className="tmr-ma">Até 15 min</p><p className="tmr-mb">{tempoResposta.ate15}%</p></div>
-            </div>
-          )}
-          {tempoResposta.pend && (
-            <button type="button" className="tmr-espera" onClick={() => setFiltroStatus('PENDENTE')} title="Ver as pendentes">
-              <Hourglass className="w-4 h-4 shrink-0" />
-              <span>Pendente há mais tempo<br /><b>{fmtMinutos(tempoResposta.pendMs)}</b> · pedido {tempoResposta.pend.cod_liberacao}</span>
-            </button>
-          )}
         </div>
 
         {/* PENDENTES DE DIAS ANTERIORES */}
