@@ -679,7 +679,9 @@ export default function SolicitacoesApp() {
               duration: 5000
             });
             // a lista pode já ter recarregado com ela (quem enviou): não duplica
-            setSolicitacoes((prev) => (prev.some((item) => item.id === payload.new.id) ? prev : [payload.new, ...prev]));
+            // só entra na lista se cair no período exibido (ex.: olhando outro dia, a nova não aparece misturada)
+            const { ini, fim } = periodoRef.current;
+            setSolicitacoes((prev) => (prev.some((item) => item.id === payload.new.id) || !noPeriodo(payload.new, ini, fim) ? prev : [payload.new, ...prev]));
           } else if (payload.eventType === 'UPDATE') {
             const reaberta = ehReabertura(solicitacoesRef.current.find((i) => i.id === payload.new.id), payload.new);
             toast(reaberta
