@@ -1493,7 +1493,7 @@ export default function SolicitacoesApp() {
     const linhas = lista.map((i) => {
       const obs = [i.observacoes ? `<div class="obs"><b>Obs.:</b> ${esc(i.observacoes)}</div>` : '', i.status === 'NAO' && i.motivo_recusa ? `<div class="obs nao-t"><b>Motivo:</b> ${esc(i.motivo_recusa)}</div>` : ''].join('');
       return `<tr>
-        <td class="nw">${esc(formatDataCurta(i.data_enviada))}</td>
+        <td class="dt">${(() => { const d = formatDataCurta(i.data_enviada).split(' '); return `${esc(d[0] || '')}<br><span>${esc(d[1] || '')}</span>`; })()}</td>
         <td class="nw b">${esc(i.cod_liberacao)}</td>
         <td><div class="b">${esc(i.nome_cliente || '—')}</div>${obs}</td>
         <td class="nw">${esc(i.rca)}</td>
@@ -1507,33 +1507,35 @@ export default function SolicitacoesApp() {
       `<tr><td class="b" style="color:${corNome(k)}">${esc(k)}</td><td class="c">${o.total}</td><td class="c sim-t">${o.SIM || 0}</td><td class="c nao-t">${o.NAO || 0}</td><td class="c pend-t">${o.PENDENTE || 0}</td></tr>`).join('');
     const html = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Relatório de Solicitações - ${esc(rotuloPeriodo)}</title>
 <style>
-  @page { size: A4 landscape; margin: 12mm 10mm 14mm; @bottom-right { content: "Página " counter(page) " de " counter(pages); font: 9px system-ui, sans-serif; color: #64748b; } }
+  @page { size: A4 portrait; margin: 10mm 9mm 13mm; @bottom-right { content: "Página " counter(page) " de " counter(pages); font: 9px system-ui, sans-serif; color: #64748b; } }
   * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-  body { font: 11px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; color: #0f172a; margin: 0; }
+  body { font: 10px/1.35 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; color: #0f172a; margin: 0; }
   .topo { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 3px solid #4f46e5; padding-bottom: 8px; margin-bottom: 10px; }
   .marca { font-size: 10px; font-weight: 800; letter-spacing: .12em; color: #4f46e5; text-transform: uppercase; }
   h1 { font-size: 20px; margin: 2px 0 0; }
   .meta { text-align: right; color: #475569; font-size: 10px; }
   .filtros { color: #334155; font-size: 10.5px; margin-bottom: 10px; }
-  .cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-bottom: 12px; }
+  .cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; margin-bottom: 10px; }
   .card { border: 1px solid #e2e8f0; border-radius: 10px; padding: 8px 10px; }
   .card .r { font-size: 9px; font-weight: 700; text-transform: uppercase; color: #64748b; letter-spacing: .04em; }
-  .card .v { font-size: 18px; font-weight: 800; margin-top: 2px; }
+  .card .v { font-size: 16px; font-weight: 800; margin-top: 2px; }
   .sim-t { color: #047857; } .nao-t { color: #be123c; } .pend-t { color: #b45309; }
   .card.sim { background: #ecfdf5; border-color: #a7f3d0; } .card.nao { background: #fff1f2; border-color: #fecdd3; } .card.pend { background: #fffbeb; border-color: #fde68a; }
   table { width: 100%; border-collapse: collapse; }
   thead { display: table-header-group; }
-  th { background: #f1f5f9; color: #334155; font-size: 9.5px; text-transform: uppercase; letter-spacing: .04em; text-align: left; padding: 6px 7px; border-bottom: 1px solid #cbd5e1; }
-  td { padding: 6px 7px; border-bottom: 1px solid #e2e8f0; vertical-align: top; }
+  table { table-layout: fixed; }
+  th { background: #f1f5f9; color: #334155; font-size: 8.5px; text-transform: uppercase; letter-spacing: .04em; text-align: left; padding: 5px 5px; border-bottom: 1px solid #cbd5e1; }
+  td { padding: 5px 5px; border-bottom: 1px solid #e2e8f0; vertical-align: top; overflow-wrap: anywhere; }
   tbody tr:nth-child(even) td { background: #f8fafc; }
   tr { break-inside: avoid; page-break-inside: avoid; }
   .nw { white-space: nowrap; } .b { font-weight: 700; } .c { text-align: center; }
-  .obs { font-size: 9.5px; color: #475569; margin-top: 2px; }
+  .obs { font-size: 8.5px; color: #475569; margin-top: 2px; }
   .mini { font-size: 8.5px; color: #64748b; margin-top: 2px; }
-  .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 9.5px; font-weight: 800; }
+  .pill { display: inline-block; padding: 2px 6px; border-radius: 999px; font-size: 8.5px; font-weight: 800; }
   .pill.sim { background: #d1fae5; color: #065f46; } .pill.nao { background: #ffe4e6; color: #9f1239; } .pill.pend { background: #fef3c7; color: #92400e; }
   .sec { font-size: 11px; font-weight: 800; color: #334155; margin: 14px 0 6px; text-transform: uppercase; letter-spacing: .05em; }
-  .resumo { width: auto; min-width: 50%; }
+  .resumo { width: 70%; table-layout: auto; }
+  .dt { font-size: 9px; line-height: 1.25; } .dt span { color: #64748b; }
   .rodape { margin-top: 10px; font-size: 9px; color: #94a3b8; text-align: right; }
 </style></head><body>
   <div class="topo">
@@ -1549,6 +1551,7 @@ export default function SolicitacoesApp() {
     <div class="card"><div class="r">Tempo médio de resposta</div><div class="v">${fmtDur(medio)}</div></div>
   </div>
   <table>
+    <colgroup><col style="width:9%"><col style="width:8%"><col style="width:31%"><col style="width:6%"><col style="width:14%"><col style="width:12%"><col style="width:11%"><col style="width:9%"></colgroup>
     <thead><tr><th>Enviada</th><th>Cód.</th><th>Cliente</th><th>RCA</th><th>Tipo</th><th>Solicitante</th><th class="c">Status</th><th class="c">Tempo</th></tr></thead>
     <tbody>${linhas}</tbody>
   </table>
