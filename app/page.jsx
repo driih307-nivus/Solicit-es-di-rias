@@ -365,7 +365,9 @@ export default function SolicitacoesApp() {
   const [confirmacao, setConfirmacao] = useState(null);      // pop-up de confirmação
   const [selecionados, setSelecionados] = useState(() => new Set()); // ids marcados para excluir em lote
   const [excluindoLote, setExcluindoLote] = useState(false);
-  const [rcasPortal, setRcasPortal] = useState([]);              // RCAs cadastrados no Portal do Representante
+  const [rcasPortal, setRcasPortal] = useState([]);
+  const [rcaListaAberta, setRcaListaAberta] = useState(false);     // lista de RCAs (balão no tema do app)
+  const [rcaDestaque, setRcaDestaque] = useState(0);              // RCAs cadastrados no Portal do Representante
   const [nomeStatus, setNomeStatus] = useState('idle');        // idle | buscando | encontrado | nao_encontrado | cadastrado | erro
   const [cadastrandoCliente, setCadastrandoCliente] = useState(false);
   const nomeAutoRef = useRef(false);                           // nome veio da lista (preenchido sozinho)
@@ -749,6 +751,15 @@ export default function SolicitacoesApp() {
     if (modalAberto) listarRcasPortal().then((l) => { if (l) setRcasPortal(l); });
   }, [modalAberto]);
   const rcaDoPortal = (cod) => rcasPortal.find((r) => mesmoCodigo(r.cod, cod)) || null;
+  const rcasSugeridos = useMemo(() => {
+    const q = normalizar(form.rca || '');
+    const lista = q ? rcasPortal.filter((r) => normalizar(r.cod).startsWith(q) || normalizar(r.nome).includes(q)) : rcasPortal;
+    return lista.slice(0, 60);
+  }, [rcasPortal, form.rca]);
+  const escolherRca = (r) => {
+    setForm((f) => ({ ...f, rca: r.cod }));
+    setRcaListaAberta(false);
+  };
 
   // Preenche o nome do cliente sozinho quando o código chega a 6 dígitos
   useEffect(() => {
@@ -2836,15 +2847,23 @@ export default function SolicitacoesApp() {
 
               <div>
                 <label className="block text-xs font-semibold text-slate-600 mb-1">Código RCA *</label>
+                <div className="relative">
                 <input
                   type="text"
                   required
-                  inputMode="numeric"
                   autoComplete="off"
-                  list="lista-rcas-portal"
-                  placeholder="Ex: 1203"
+                  placeholder="Ex: 1203 (ou digite o nome)"
                   value={form.rca}
-                  onChange={(e) => setForm({ ...form, rca: e.target.value.replace(/\s+-.*$/, '').trim() })}
+                  onFocus={() => { setRcaListaAberta(true); setRcaDestaque(0); }}
+                  onBlur={() => setTimeout(() => { setRcaListaAberta(false); if (!rcaDoPortal(form.rca) && rcasSugeridos.length === 1 && /\D/.test(form.rca)) escolherRca(rcasSugeridos[0]); }, 150)}
+                  onChange={(e) => { setForm({ ...form, rca: e.target.value }); setRcaListaAberta(true); setRcaDestaque(0); }}
+                  onKeyDown={(e) => {
+                    if (!rcaListaAberta || !rcasSugeridos.length) return;
+                    if (e.key === 'ArrowDown') { e.preventDefault(); setRcaDestaque((i) => Math.min(i + 1, rcasSugeridos.length - 1)); }
+                    else if (e.key === 'ArrowUp') { e.preventDefault(); setRcaDestaque((i) => Math.max(i - 1, 0)); }
+                    else if (e.key === 'Enter') { e.preventDefault(); escolherRca(rcasSugeridos[rcaDestaque] || rcasSugeridos[0]); }
+                    else if (e.key === 'Escape') { e.stopPropagation(); setRcaListaAberta(false); }
+                  }}
                   className={`w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:outline-none transition-colors ${
                     form.rca.trim() && rcaDoPortal(form.rca)
                       ? 'border-emerald-300 bg-emerald-50/50 focus:ring-emerald-500'
@@ -2853,9 +2872,24 @@ export default function SolicitacoesApp() {
                       : 'border-slate-300 focus:ring-indigo-500'
                   }`}
                 />
-                <datalist id="lista-rcas-portal">
-                  {rcasPortal.map((r) => <option key={r.cod} value={r.cod}>{r.cod} - {r.nome}</option>)}
-                </datalist>
+                {rcaListaAberta && rcasSugeridos.length > 0 && !(rcasSugeridos.length === 1 && mesmoCodigo(rcasSugeridos[0].cod, form.rca)) && (
+                  <ul className="fade-in absolute z-30 left-0 right-0 mt-1 max-h-56 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg py-1">
+                    {rcasSugeridos.map((r, i) => (
+                      <li key={r.cod}>
+                        <button
+                          type="button"
+                          onMouseDown={(e) => { e.preventDefault(); escolherRca(r); }}
+                          onMouseEnter={() => setRcaDestaque(i)}
+                          className={`w-full text-left px-3 py-2 text-sm flex items-baseline gap-2 transition-colors ${i === rcaDestaque ? 'bg-slate-100' : 'hover:bg-slate-100'}`}
+                        >
+                          <span className="font-bold text-slate-800 tabular-nums">{r.cod}</span>
+                          <span className="text-slate-500 text-xs truncate">{r.nome}</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                </div>
                 {form.rca.trim() && rcaDoPortal(form.rca) && (
                   <p className="fade-in text-[11px] text-emerald-600 mt-1">{rcaDoPortal(form.rca).nome} · será notificado no portal.</p>
                 )}
