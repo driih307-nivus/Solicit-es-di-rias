@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import { comprimirVideo } from '@/lib/comprimirVideo';
+import { listarRcasPortal, notificarRcaPortal, rcasEmCache, mesmoCodigo } from '@/lib/portal';
 import toast from 'react-hot-toast';
 import confetti from 'canvas-confetti';
 import {
@@ -354,6 +355,7 @@ export default function SolicitacoesApp() {
   const [confirmacao, setConfirmacao] = useState(null);      // pop-up de confirmação
   const [selecionados, setSelecionados] = useState(() => new Set()); // ids marcados para excluir em lote
   const [excluindoLote, setExcluindoLote] = useState(false);
+  const [rcasPortal, setRcasPortal] = useState([]);              // RCAs cadastrados no Portal do Representante
   const [nomeStatus, setNomeStatus] = useState('idle');        // idle | buscando | encontrado | nao_encontrado | cadastrado | erro
   const [cadastrandoCliente, setCadastrandoCliente] = useState(false);
   const nomeAutoRef = useRef(false);                           // nome veio da lista (preenchido sozinho)
@@ -723,6 +725,16 @@ export default function SolicitacoesApp() {
       supabase.removeChannel(channel);
     };
   }, []);
+
+  // Lista de RCAs do portal: usa o que está guardado e atualiza ao abrir o app e o formulário
+  useEffect(() => {
+    setRcasPortal(rcasEmCache());
+    listarRcasPortal().then((l) => { if (l) setRcasPortal(l); });
+  }, []);
+  useEffect(() => {
+    if (modalAberto) listarRcasPortal().then((l) => { if (l) setRcasPortal(l); });
+  }, [modalAberto]);
+  const rcaDoPortal = (cod) => rcasPortal.find((r) => mesmoCodigo(r.cod, cod)) || null;
 
   // Preenche o nome do cliente sozinho quando o código chega a 6 dígitos
   useEffect(() => {
@@ -1184,7 +1196,7 @@ export default function SolicitacoesApp() {
         ['Solicitante', solicitante],
         ['Cód. cliente', cod],
         ['Cliente', nome],
-        ['RCA', rca],
+        ['RCA', rcaDoPortal(rca) ? `${rca} - ${rcaDoPortal(rca).nome}` : `${rca} (não cadastrado no portal: não será notificado)`],
         ['Tipo', form.tipo_solicitacao],
         ['Anexos', String(qtdAnexos)],
         ...(clienteNovo ? [['Cliente novo', 'será cadastrado na lista']] : [])
@@ -1356,9 +1368,16 @@ export default function SolicitacoesApp() {
       } else {
         toast.error('Solicitação RECUSADA (NÃO)', { id: toastId });
       }
+      const idResp = modalAprovacao.id;
       setModalAprovacao(null);
       setMotivoRecusaInput('');
       fetchSolicitacoes();
+      // Avisa o representante no Portal (card Notificações + push no celular)
+      notificarRcaPortal(idResp).then((r) => {
+        if (r?.ok && !r.ja_enviada) toast.success(`RCA ${r.rca} notificado no portal${r.enviados ? '' : ' (sem notificação ativa no celular; fica no card Notificações)'}.`, { icon: '📲', duration: 5000 });
+        else if (r?.motivo === 'rca_nao_cadastrado') toast(`RCA ${r.rca || ''} não está cadastrado no portal: não foi notificado.`, { icon: '⚠️', duration: 6000 });
+        else if (!r?.ok && !r?.ja_enviada) toast(`Não foi possível notificar o RCA no portal${r?.error ? ': ' + r.error : ''}.`, { icon: '⚠️', duration: 6000 });
+      });
     }
   };
 
@@ -2750,11 +2769,29 @@ export default function SolicitacoesApp() {
                 <input
                   type="text"
                   required
+                  inputMode="numeric"
+                  autoComplete="off"
+                  list="lista-rcas-portal"
                   placeholder="Ex: 1203"
                   value={form.rca}
-                  onChange={(e) => setForm({ ...form, rca: e.target.value })}
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                  onChange={(e) => setForm({ ...form, rca: e.target.value.replace(/\s+-.*$/, '').trim() })}
+                  className={`w-full border rounded-lg px-3 py-2 text-sm focus:ring-2 focus:outline-none transition-colors ${
+                    form.rca.trim() && rcaDoPortal(form.rca)
+                      ? 'border-emerald-300 bg-emerald-50/50 focus:ring-emerald-500'
+                      : form.rca.trim().length >= 4 && rcasPortal.length
+                      ? 'border-amber-300 focus:ring-amber-400'
+                      : 'border-slate-300 focus:ring-indigo-500'
+                  }`}
                 />
+                <datalist id="lista-rcas-portal">
+                  {rcasPortal.map((r) => <option key={r.cod} value={r.cod}>{r.cod} - {r.nome}</option>)}
+                </datalist>
+                {form.rca.trim() && rcaDoPortal(form.rca) && (
+                  <p className="fade-in text-[11px] text-emerald-600 mt-1">{rcaDoPortal(form.rca).nome} · será notificado no portal.</p>
+                )}
+                {form.rca.trim().length >= 4 && rcasPortal.length > 0 && !rcaDoPortal(form.rca) && (
+                  <p className="fade-in text-[11px] text-amber-600 mt-1">RCA {form.rca.trim()} não está cadastrado no Portal do Representante: a resposta não chega até ele.</p>
+                )}
               </div>
 
               <div>
