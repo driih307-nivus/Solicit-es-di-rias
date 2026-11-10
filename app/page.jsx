@@ -206,6 +206,13 @@ const fmtMinutos = (ms) => {
 };
 
 // Ordem da lista: o que foi reaberto sobe para o topo (pela hora da reabertura)
+// "Aguardando setor de cadastro": continua PENDENTE; a marca é a última entrada do histórico
+const MOTIVO_AGUARDANDO = 'Aguardando setor de cadastro';
+const aguardandoCadastro = (i) => {
+  const h = (i && i.historico) || [];
+  return Boolean(i && i.status === 'PENDENTE' && h.length && h[h.length - 1].acao === 'aguardando_cadastro');
+};
+
 const ultimaMovimentacao = (i) => new Date(i.reaberta_em || i.data_enviada).getTime() || 0;
 
 // Uma atualização é "reabertura" quando um caso respondido volta para PENDENTE
@@ -548,6 +555,7 @@ export default function SolicitacoesApp() {
       const reaberta = ehReabertura(solicitacoesRef.current.find((i) => i.id === n.id), n);
       const rotulo = reaberta
         ? 'Reaberta 🔄 — voltou para análise'
+        : aguardandoCadastro(n) ? `${MOTIVO_AGUARDANDO} ⏳`
         : n.status === 'SIM' ? 'Aprovada ✅' : n.status === 'NAO' ? 'Recusada ❌' : 'Pendente';
       mostrarAviso(`Solicitação ${n.cod_liberacao}`, reaberta ? rotulo : `Status: ${rotulo}`, `sol-${n.id}`);
     }
@@ -700,10 +708,13 @@ export default function SolicitacoesApp() {
             setSolicitacoes((prev) => (prev.some((item) => item.id === payload.new.id) || !noPeriodo(payload.new, ini, fim) ? prev : [payload.new, ...prev]));
           } else if (payload.eventType === 'UPDATE') {
             const reaberta = ehReabertura(solicitacoesRef.current.find((i) => i.id === payload.new.id), payload.new);
+            const aguardando = aguardandoCadastro(payload.new) && !aguardandoCadastro(solicitacoesRef.current.find((i) => i.id === payload.new.id));
             toast(reaberta
               ? `Solicitação ${payload.new.cod_liberacao} reaberta — voltou para análise`
+              : aguardando
+              ? `Solicitação ${payload.new.cod_liberacao}: ${MOTIVO_AGUARDANDO}`
               : `Solicitação ${payload.new.cod_liberacao} atualizada para [${payload.new.status}]`, {
-              icon: reaberta ? '🔄' : payload.new.status === 'SIM' ? '✅' : payload.new.status === 'NAO' ? '❌' : 'ℹ️',
+              icon: reaberta ? '🔄' : aguardando ? '⏳' : payload.new.status === 'SIM' ? '✅' : payload.new.status === 'NAO' ? '❌' : 'ℹ️',
               duration: 4000
             });
             setSolicitacoes((prev) => {
@@ -1381,6 +1392,44 @@ export default function SolicitacoesApp() {
     }
   };
 
+  // Aguardando setor de cadastro: fica PENDENTE na lista, com a marca e o registro no histórico
+  const pedirAguardandoCadastro = () => {
+    if (!modalAprovacao) return;
+    pedirConfirmacao({
+      titulo: 'Aguardando setor de cadastro?',
+      mensagem: 'A solicitação continua pendente na lista, marcada como aguardando o setor de cadastro.',
+      icone: <Clock className="w-5 h-5" />,
+      tom: 'indigo',
+      textoConfirmar: 'Marcar',
+      detalhes: [
+        ['Cód. cliente', modalAprovacao.cod_liberacao],
+        ['Cliente', modalAprovacao.nome_cliente],
+        ['RCA', modalAprovacao.rca]
+      ],
+      onConfirm: () => executarAguardandoCadastro(modalAprovacao)
+    });
+  };
+
+  const executarAguardandoCadastro = async (item) => {
+    const toastId = toast.loading('Marcando...');
+    const entrada = { acao: 'aguardando_cadastro', em: new Date().toISOString(), por: perfil, observacao: motivoRecusaInput.trim() };
+    const { data, error } = await supabase
+      .from('solicitacoes')
+      .update({ status: 'PENDENTE', data_finalizada: null, historico: [...(item.historico || []), entrada] })
+      .eq('id', item.id)
+      .select();
+    if (error) {
+      toast.error('Erro ao marcar: ' + error.message, { id: toastId, duration: 7000 });
+    } else if (!data || data.length === 0) {
+      toast.error('Não foi possível marcar. Verifique a permissão de UPDATE (RLS) da tabela.', { id: toastId });
+    } else {
+      toast.success(`${MOTIVO_AGUARDANDO} — continua pendente.`, { id: toastId, icon: '⏳' });
+      setSolicitacoes((prev) => prev.map((i) => (i.id === data[0].id ? data[0] : i)));
+      setModalAprovacao(null);
+      setMotivoRecusaInput('');
+    }
+  };
+
   // Reabrir: volta para análise sem apagar nada (observações e anexos ficam; a resposta anterior vai para o histórico)
   const pedirReabrir = (item) =>
     pedirConfirmacao({
@@ -1837,7 +1886,9 @@ export default function SolicitacoesApp() {
       >
         {item.status === 'SIM' ? 'SIM' : item.status === 'NAO' ? 'NÃO' : 'EM ANÁLISE'}
       </span>
-      {item.status === 'PENDENTE' && item.reaberta_em && (
+      {aguardandoCadastro(item) ? (
+        <span className="text-[10px] font-semibold text-sky-700 whitespace-nowrap">⏳ Aguard. cadastro</span>
+      ) : item.status === 'PENDENTE' && item.reaberta_em && (
         <span className="text-[10px] font-semibold text-amber-700 whitespace-nowrap">🔄 Reaberta</span>
       )}
     </span>
@@ -1922,9 +1973,23 @@ export default function SolicitacoesApp() {
   };
 
   const blocoHistorico = (item) => {
-    const h = item.historico || [];
-    if (h.length === 0) return null;
+    const todas = item.historico || [];
+    const ag = todas.filter((e) => e.acao === 'aguardando_cadastro');
+    const h = todas.filter((e) => e.acao !== 'aguardando_cadastro');
+    if (todas.length === 0) return null;
     return (
+      <>
+      {ag.length > 0 && (
+        <div className="bg-sky-50 p-3 rounded-lg text-xs text-sky-800 border border-sky-200 mb-3">
+          <p className="font-semibold mb-1.5 flex items-center gap-1.5"><Clock className="w-3.5 h-3.5" /> {MOTIVO_AGUARDANDO}</p>
+          <ul className="space-y-1">
+            {[...ag].reverse().map((e, i) => (
+              <li key={i} className="break-words">Marcado em {formatDateTime(e.em)}{e.observacao ? ` — ${e.observacao}` : ''}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {h.length > 0 && (
       <div className="bg-amber-50 p-3 rounded-lg text-xs text-amber-800 border border-amber-200 mb-3">
         <p className="font-semibold mb-1.5 flex items-center gap-1.5">
           <RotateCcw className="w-3.5 h-3.5" /> Histórico de reaberturas ({h.length})
@@ -1941,6 +2006,8 @@ export default function SolicitacoesApp() {
           ))}
         </ul>
       </div>
+      )}
+      </>
     );
   };
 
@@ -3003,6 +3070,16 @@ export default function SolicitacoesApp() {
                   <CheckCircle2 className="w-4 h-4" /> Aprovar (SIM)
                 </button>
               </div>
+
+              {!aguardandoCadastro(modalAprovacao) && (
+                <button
+                  type="button"
+                  onClick={pedirAguardandoCadastro}
+                  className="w-full inline-flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-sm font-semibold bg-sky-50 text-sky-700 border border-sky-200 hover:bg-sky-100 transition"
+                >
+                  <Clock className="w-4 h-4" /> {MOTIVO_AGUARDANDO}
+                </button>
+              )}
 
               {modalAprovacao.status !== 'PENDENTE' && (
                 <button
