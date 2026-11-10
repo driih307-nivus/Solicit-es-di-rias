@@ -9,7 +9,7 @@ import {
   Clock, CheckCircle2, XCircle, AlertCircle, Plus, Search,
   Download, RefreshCw, UserCheck, Send, MessageSquare, Shield, User,
   Pencil, Trash2, X, CalendarDays,
-  Paperclip, FileText, Music, Image as ImageIcon, Video, ExternalLink, Mic, Square, Eye, Bell, BellOff, Sun, Moon, RotateCcw, GripVertical
+  Paperclip, FileText, Music, Image as ImageIcon, Video, ExternalLink, Mic, Square, Eye, Bell, BellOff, Sun, Moon, RotateCcw, GripVertical, Printer
 } from 'lucide-react';
 
 const TIPOS_SOLICITACAO = [
@@ -1460,6 +1460,116 @@ export default function SolicitacoesApp() {
     document.body.removeChild(link);
   };
 
+  // ===== Relatório para imprimir / salvar em PDF (usa o que está na tela: período, status, solicitante e busca) =====
+  const imprimirRelatorio = () => {
+    const lista = solicitacoesFiltradas;
+    if (!lista.length) { toast.error('Nenhuma solicitação na tela para imprimir.'); return; }
+    const esc = (t) => String(t ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const HEX = { azul: '#4338ca', laranja: '#ea580c', verde: '#166534', rosa: '#db2777', roxo: '#7e22ce' };
+    const corNome = (n) => HEX[corSolicitante(n).replace('sol-cor-', '')] || HEX.azul;
+    const n = { SIM: 0, NAO: 0, PENDENTE: 0 };
+    lista.forEach((i) => { n[i.status] = (n[i.status] || 0) + 1; });
+    const tempos = lista.filter((i) => i.data_finalizada && i.data_enviada).map((i) => new Date(i.data_finalizada) - new Date(i.data_enviada)).filter((ms) => ms >= 0);
+    const medio = tempos.length ? tempos.reduce((a, b) => a + b, 0) / tempos.length : null;
+    const fmtDur = (ms) => {
+      if (ms == null) return '—';
+      const m = Math.round(ms / 60000);
+      return m < 60 ? `${m} min` : `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}min`;
+    };
+    const porSol = {};
+    lista.forEach((i) => {
+      const k = i.solicitante || 'Não informado';
+      const o = (porSol[k] = porSol[k] || { total: 0, SIM: 0, NAO: 0, PENDENTE: 0 });
+      o.total++; o[i.status] = (o[i.status] || 0) + 1;
+    });
+    const statusPill = (st) => st === 'SIM' ? '<span class="pill sim">Aprovada</span>' : st === 'NAO' ? '<span class="pill nao">Recusada</span>' : '<span class="pill pend">Pendente</span>';
+    const filtros = [
+      `Período: ${esc(rotuloPeriodo)}`,
+      filtroStatus !== 'TODOS' ? `Status: ${filtroStatus === 'SIM' ? 'Aprovadas' : filtroStatus === 'NAO' ? 'Recusadas' : 'Pendentes'}` : '',
+      filtroSolicitante ? `Solicitante: ${esc(filtroSolicitante)}` : '',
+      busca.trim() ? `Busca: “${esc(busca.trim())}”` : ''
+    ].filter(Boolean).join('  ·  ');
+    const agora = new Date().toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    const linhas = lista.map((i) => {
+      const obs = [i.observacoes ? `<div class="obs"><b>Obs.:</b> ${esc(i.observacoes)}</div>` : '', i.status === 'NAO' && i.motivo_recusa ? `<div class="obs nao-t"><b>Motivo:</b> ${esc(i.motivo_recusa)}</div>` : ''].join('');
+      return `<tr>
+        <td class="nw">${esc(formatDataCurta(i.data_enviada))}</td>
+        <td class="nw b">${esc(i.cod_liberacao)}</td>
+        <td><div class="b">${esc(i.nome_cliente || '—')}</div>${obs}</td>
+        <td class="nw">${esc(i.rca)}</td>
+        <td>${esc(i.tipo_solicitacao)}</td>
+        <td class="b" style="color:${corNome(i.solicitante)}">${esc(i.solicitante || '—')}</td>
+        <td class="nw c">${statusPill(i.status)}${i.reaberta_em ? '<div class="mini">reaberta</div>' : ''}</td>
+        <td class="nw c">${i.data_finalizada ? esc(calcularTempoConclusao(i.data_enviada, i.data_finalizada)) : '—'}</td>
+      </tr>`;
+    }).join('');
+    const resumoSol = Object.entries(porSol).sort((a, b) => b[1].total - a[1].total).map(([k, o]) =>
+      `<tr><td class="b" style="color:${corNome(k)}">${esc(k)}</td><td class="c">${o.total}</td><td class="c sim-t">${o.SIM || 0}</td><td class="c nao-t">${o.NAO || 0}</td><td class="c pend-t">${o.PENDENTE || 0}</td></tr>`).join('');
+    const html = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Relatório de Solicitações - ${esc(rotuloPeriodo)}</title>
+<style>
+  @page { size: A4 landscape; margin: 12mm 10mm 14mm; @bottom-right { content: "Página " counter(page) " de " counter(pages); font: 9px system-ui, sans-serif; color: #64748b; } }
+  * { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body { font: 11px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; color: #0f172a; margin: 0; }
+  .topo { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 3px solid #4f46e5; padding-bottom: 8px; margin-bottom: 10px; }
+  .marca { font-size: 10px; font-weight: 800; letter-spacing: .12em; color: #4f46e5; text-transform: uppercase; }
+  h1 { font-size: 20px; margin: 2px 0 0; }
+  .meta { text-align: right; color: #475569; font-size: 10px; }
+  .filtros { color: #334155; font-size: 10.5px; margin-bottom: 10px; }
+  .cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin-bottom: 12px; }
+  .card { border: 1px solid #e2e8f0; border-radius: 10px; padding: 8px 10px; }
+  .card .r { font-size: 9px; font-weight: 700; text-transform: uppercase; color: #64748b; letter-spacing: .04em; }
+  .card .v { font-size: 18px; font-weight: 800; margin-top: 2px; }
+  .sim-t { color: #047857; } .nao-t { color: #be123c; } .pend-t { color: #b45309; }
+  .card.sim { background: #ecfdf5; border-color: #a7f3d0; } .card.nao { background: #fff1f2; border-color: #fecdd3; } .card.pend { background: #fffbeb; border-color: #fde68a; }
+  table { width: 100%; border-collapse: collapse; }
+  thead { display: table-header-group; }
+  th { background: #f1f5f9; color: #334155; font-size: 9.5px; text-transform: uppercase; letter-spacing: .04em; text-align: left; padding: 6px 7px; border-bottom: 1px solid #cbd5e1; }
+  td { padding: 6px 7px; border-bottom: 1px solid #e2e8f0; vertical-align: top; }
+  tbody tr:nth-child(even) td { background: #f8fafc; }
+  tr { break-inside: avoid; page-break-inside: avoid; }
+  .nw { white-space: nowrap; } .b { font-weight: 700; } .c { text-align: center; }
+  .obs { font-size: 9.5px; color: #475569; margin-top: 2px; }
+  .mini { font-size: 8.5px; color: #64748b; margin-top: 2px; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 9.5px; font-weight: 800; }
+  .pill.sim { background: #d1fae5; color: #065f46; } .pill.nao { background: #ffe4e6; color: #9f1239; } .pill.pend { background: #fef3c7; color: #92400e; }
+  .sec { font-size: 11px; font-weight: 800; color: #334155; margin: 14px 0 6px; text-transform: uppercase; letter-spacing: .05em; }
+  .resumo { width: auto; min-width: 50%; }
+  .rodape { margin-top: 10px; font-size: 9px; color: #94a3b8; text-align: right; }
+</style></head><body>
+  <div class="topo">
+    <div><div class="marca">Frigolden · Solicitações Diárias</div><h1>Relatório de Solicitações</h1></div>
+    <div class="meta">Gerado em ${agora}<br>${lista.length} ${lista.length > 1 ? 'solicitações' : 'solicitação'}</div>
+  </div>
+  <div class="filtros">${filtros}</div>
+  <div class="cards">
+    <div class="card"><div class="r">Total</div><div class="v">${lista.length}</div></div>
+    <div class="card sim"><div class="r">Aprovadas</div><div class="v sim-t">${n.SIM}</div></div>
+    <div class="card nao"><div class="r">Recusadas</div><div class="v nao-t">${n.NAO}</div></div>
+    <div class="card pend"><div class="r">Pendentes</div><div class="v pend-t">${n.PENDENTE}</div></div>
+    <div class="card"><div class="r">Tempo médio de resposta</div><div class="v">${fmtDur(medio)}</div></div>
+  </div>
+  <table>
+    <thead><tr><th>Enviada</th><th>Cód.</th><th>Cliente</th><th>RCA</th><th>Tipo</th><th>Solicitante</th><th class="c">Status</th><th class="c">Tempo</th></tr></thead>
+    <tbody>${linhas}</tbody>
+  </table>
+  ${Object.keys(porSol).length > 1 ? `<div class="sec">Resumo por solicitante</div>
+  <table class="resumo"><thead><tr><th>Solicitante</th><th class="c">Total</th><th class="c">Aprovadas</th><th class="c">Recusadas</th><th class="c">Pendentes</th></tr></thead><tbody>${resumoSol}</tbody></table>` : ''}
+  <div class="rodape">Frigolden · Relatório gerado pelo app de Solicitações</div>
+  <script>window.onload = function () { setTimeout(function () { window.focus(); window.print(); }, 300); };<\/script>
+</body></html>`;
+    // nova aba (no celular abre a tela de imprimir/salvar PDF); se o navegador bloquear, imprime por um quadro escondido
+    const w = window.open('', '_blank');
+    if (w && w.document) {
+      w.document.open(); w.document.write(html); w.document.close();
+      return;
+    }
+    const f = document.createElement('iframe');
+    f.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0';
+    document.body.appendChild(f);
+    f.contentDocument.open(); f.contentDocument.write(html.replace(/<script>[\s\S]*?<\/script>/, '')); f.contentDocument.close();
+    setTimeout(() => { f.contentWindow.focus(); f.contentWindow.print(); setTimeout(() => f.remove(), 2000); }, 400);
+  };
+
   // Itens dentro do período selecionado (base dos contadores)
   const doPeriodo = useMemo(
     () =>
@@ -1860,6 +1970,14 @@ export default function SolicitacoesApp() {
               className="flex-1 md:flex-none justify-center border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 px-3 py-2.5 md:py-2 rounded-xl text-sm font-medium flex items-center gap-2 transition"
             >
               <Download className="w-4 h-4" /> Exportar CSV
+            </button>
+
+            <button
+              onClick={imprimirRelatorio}
+              title="Imprimir ou salvar em PDF o que está na tela (período, status, solicitante e busca)"
+              className="flex-1 md:flex-none justify-center border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 px-3 py-2.5 md:py-2 rounded-xl text-sm font-medium flex items-center gap-2 transition"
+            >
+              <Printer className="w-4 h-4" /> Imprimir / PDF
             </button>
           </div>
         </div>
