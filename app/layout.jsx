@@ -1,7 +1,7 @@
 import './globals.css';
 import { Toaster } from 'react-hot-toast';
 
-const TEMA_SCRIPT = `(function(){try{var t=localStorage.getItem('sl_tema');var d=t?t==='escuro':window.matchMedia('(prefers-color-scheme: dark)').matches;if(d)document.documentElement.classList.add('dark');}catch(e){}})();`;
+const TEMA_SCRIPT = `(function(){try{var t=localStorage.getItem('sl_tema');var d=t?t==='escuro':window.matchMedia('(prefers-color-scheme: dark)').matches;if(d)document.documentElement.classList.add('dark');var m=document.querySelector('meta[name="theme-color"]');if(m)m.setAttribute('content',d?'#020617':'#f1f5f9');}catch(e){}})();`;
 
 const aprovador = process.env.NEXT_PUBLIC_PERFIL === 'aprovador';
 
@@ -23,13 +23,14 @@ export const viewport = {
   width: 'device-width',
   initialScale: 1,
   viewportFit: 'cover',
-  themeColor: '#4f46e5',
 };
 
 export default function RootLayout({ children }) {
   return (
     <html lang="pt-BR" suppressHydrationWarning>
       <head>
+        {/* Cor da barra de cima (status) e da de baixo (navegação) do celular — acompanha o tema */}
+        <meta name="theme-color" content="#f1f5f9" />
         {/* Aplica o tema salvo antes de desenhar a tela (evita piscar) */}
         <script dangerouslySetInnerHTML={{ __html: TEMA_SCRIPT }} />
       </head>

@@ -408,6 +408,8 @@ export default function SolicitacoesApp() {
     const escuro = !document.documentElement.classList.contains('dark');
     document.documentElement.classList.toggle('dark', escuro);
     setTema(escuro ? 'escuro' : 'claro');
+    // barras do celular (status em cima e navegação embaixo) na cor do tema
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', escuro ? '#020617' : '#f1f5f9');
     try {
       localStorage.setItem('sl_tema', escuro ? 'escuro' : 'claro');
     } catch (e) {}
