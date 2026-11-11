@@ -2719,11 +2719,13 @@ export default function SolicitacoesApp() {
           >
             Nova solicitação
           </span>
+          {/* anel pulsante suave atrás do botão */}
+          <span aria-hidden="true" className="pointer-events-none absolute inset-0 rounded-full bg-blue-500 opacity-40 animate-ping" style={{ animationDuration: '2.2s' }} />
           <button
             onClick={abrirNova}
             aria-label="Nova solicitação"
             title="Nova solicitação"
-            className="w-14 h-14 rounded-full bg-blue-600 hover:bg-blue-700 active:scale-95 text-white shadow-xl shadow-blue-900/30 border-2 border-white/80 flex items-center justify-center transition"
+            className="relative w-14 h-14 rounded-full bg-blue-600 hover:bg-blue-700 active:scale-95 text-white shadow-xl shadow-blue-900/30 border-2 border-white/80 flex items-center justify-center transition"
           >
             <Plus className="w-7 h-7" strokeWidth={2.75} />
           </button>
