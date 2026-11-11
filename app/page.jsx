@@ -2061,7 +2061,7 @@ export default function SolicitacoesApp() {
   );
 
   return (
-    <div className="min-h-screen bg-slate-100 p-3 sm:p-6 pb-24 md:pb-6 overflow-x-hidden">
+    <div className="min-h-screen bg-slate-100 p-3 sm:p-6 pb-24 overflow-x-hidden">
       <div className="max-w-[1800px] mx-auto space-y-4 sm:space-y-5">
         
         {/* CABEÇALHO */}
@@ -2082,16 +2082,6 @@ export default function SolicitacoesApp() {
               {perfil === 'APROVADOR' ? <Shield className="w-3.5 h-3.5" /> : <User className="w-3.5 h-3.5" />}
               {perfil === 'APROVADOR' ? 'Aprovador' : 'Solicitante (RCA)'}
             </span>
-
-            {/* Botão de Nova Solicitação (Apenas Solicitante) */}
-            {perfil === 'SOLICITANTE' && (
-              <button
-                onClick={abrirNova}
-                className="hidden md:flex bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-sm font-semibold items-center gap-2 transition shadow-sm"
-              >
-                <Plus className="w-4 h-4" /> Nova Solicitação
-              </button>
-            )}
 
             <button
               onClick={alternarTema}
@@ -2720,15 +2710,24 @@ export default function SolicitacoesApp() {
         </div>
       )}
 
-      {/* BOTÃO FLUTUANTE (CELULAR, SOLICITANTE) */}
+      {/* BOTÃO FLUTUANTE: NOVA SOLICITAÇÃO (SOLICITANTE) — círculo azul com +, texto ao passar o mouse */}
       {perfil === 'SOLICITANTE' && (
-        <button
-          onClick={abrirNova}
-          aria-label="Nova solicitação"
-          className="fade-in md:hidden fixed right-4 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-40 bg-indigo-600 active:bg-indigo-700 text-white rounded-full px-5 py-3.5 shadow-lg flex items-center gap-2 text-sm font-semibold"
-        >
-          <Plus className="w-5 h-5" /> Nova Solicitação
-        </button>
+        <div className="fade-in group fixed right-4 md:right-6 bottom-[calc(1.25rem+env(safe-area-inset-bottom))] md:bottom-6 z-40 flex items-center">
+          <span
+            aria-hidden="true"
+            className="pointer-events-none absolute right-full mr-3 whitespace-nowrap rounded-xl bg-slate-900 text-white text-xs font-semibold px-3 py-1.5 shadow-lg opacity-0 translate-x-2 transition duration-200 group-hover:opacity-100 group-hover:translate-x-0 group-focus-within:opacity-100 group-focus-within:translate-x-0"
+          >
+            Nova solicitação
+          </span>
+          <button
+            onClick={abrirNova}
+            aria-label="Nova solicitação"
+            title="Nova solicitação"
+            className="w-14 h-14 rounded-full bg-blue-600 hover:bg-blue-700 active:scale-95 text-white shadow-xl shadow-blue-900/30 border-2 border-white/80 flex items-center justify-center transition"
+          >
+            <Plus className="w-7 h-7" strokeWidth={2.75} />
+          </button>
+        </div>
       )}
 
       {/* MODAL: NOVA SOLICITAÇÃO / EDITAR SOLICITAÇÃO */}
