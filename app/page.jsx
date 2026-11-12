@@ -2836,7 +2836,7 @@ export default function SolicitacoesApp() {
                       type="button"
                       onClick={() => cadastrarCliente(form.cod_liberacao, form.nome_cliente)}
                       disabled={cadastrandoCliente || form.nome_cliente.trim().length < 2}
-                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold text-white bg-amber-600 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed transition"
+                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition"
                     >
                       {cadastrandoCliente ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <UserCheck className="w-3.5 h-3.5" />}
                       {cadastrandoCliente ? 'Cadastrando...' : 'Cadastrar cliente na lista'}
