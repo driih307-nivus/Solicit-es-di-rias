@@ -10,7 +10,7 @@ import {
   Clock, CheckCircle2, XCircle, AlertCircle, Plus, Search,
   Download, RefreshCw, UserCheck, Send, MessageSquare, Shield, User,
   Pencil, Trash2, X, CalendarDays,
-  Paperclip, FileText, Music, Image as ImageIcon, Video, ExternalLink, Mic, Square, Eye, Bell, BellOff, Sun, Moon, RotateCcw, GripVertical, Printer, Timer, TrendingDown, TrendingUp
+  Paperclip, FileText, Music, Image as ImageIcon, Video, ExternalLink, Mic, Square, Eye, Bell, BellOff, Sun, Moon, RotateCcw, GripVertical, Printer, Timer, TrendingDown, TrendingUp, ArrowUpToLine
 } from 'lucide-react';
 
 const TIPOS_SOLICITACAO = [
@@ -194,7 +194,7 @@ const noPeriodo = (item, ini, fim) => {
     const d = paraDataLocal(v);
     return Boolean(d) && (!ini || d >= ini) && (!fim || d <= fim);
   };
-  return dentro(item.data_enviada) || dentro(item.reaberta_em);
+  return dentro(item.data_enviada) || dentro(item.reaberta_em) || dentro(item.topo_em);
 };
 
 // Tempo em minutos -> "18 min", "1h 05min", "<1 min"
@@ -216,7 +216,8 @@ const aguardandoCadastro = (i) => {
   return Boolean(i && i.status === 'PENDENTE' && h.length && h[h.length - 1].acao === 'aguardando_cadastro');
 };
 
-const ultimaMovimentacao = (i) => new Date(i.reaberta_em || i.data_enviada).getTime() || 0;
+// topo da lista: o mais recente entre envio, reabertura e "subir ao topo"
+const ultimaMovimentacao = (i) => Math.max(...[i.topo_em, i.reaberta_em, i.data_enviada].map((v) => (v ? new Date(v).getTime() || 0 : 0)));
 
 // Uma atualização é "reabertura" quando um caso respondido volta para PENDENTE
 const ehReabertura = (antes, novo) => {
@@ -603,9 +604,10 @@ export default function SolicitacoesApp() {
         const c = [ini && `${campo}.gte.${ini}`, fim && `${campo}.lte.${fim}`].filter(Boolean);
         return c.length > 1 ? `and(${c.join(',')})` : c[0];
       };
-      return q.or(`${grupo('data_enviada')},${grupo('reaberta_em')}`);
+      return q.or(`${grupo('data_enviada')},${grupo('reaberta_em')}${comReaberta === 'topo' ? ',' + grupo('topo_em') : ''}`);
     };
-    let resp = await montar(true);
+    let resp = await montar('topo');
+    if (resp.error) resp = await montar(true); // coluna topo_em ainda não criada
     if (resp.error) resp = await montar(false); // coluna reaberta_em ainda não criada
     const { data, error } = resp;
     if (reqId !== reqRef.current) return; // resposta antiga, ignora
@@ -1446,6 +1448,27 @@ export default function SolicitacoesApp() {
     }
   };
 
+  // Subir ao topo: volta a solicitação para o começo da lista, sem mudar status nem data de envio
+  const subirAoTopo = async (item) => {
+    const em = new Date().toISOString();
+    const toastId = toast.loading('Subindo ao topo...');
+    const { data, error } = await supabase
+      .from('solicitacoes')
+      .update({ topo_em: em, historico: [...(item.historico || []), { acao: 'topo', em, por: perfil }] })
+      .eq('id', item.id)
+      .select();
+    if (error) {
+      const dica = /topo_em/i.test(error.message) ? ' (rode o arquivo topo.sql no Supabase das Solicitações)' : '';
+      toast.error('Erro ao subir ao topo: ' + error.message + dica, { id: toastId, duration: 8000 });
+    } else if (!data || data.length === 0) {
+      toast.error('Não foi possível subir ao topo. Verifique a permissão de UPDATE (RLS) da tabela.', { id: toastId });
+    } else {
+      toast.success('Solicitação no topo da lista.', { id: toastId });
+      setSolicitacoes((prev) => prev.map((i) => (i.id === data[0].id ? data[0] : i)));
+      try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch (e) {}
+    }
+  };
+
   // Reabrir: volta para análise sem apagar nada (observações e anexos ficam; a resposta anterior vai para o histórico)
   const pedirReabrir = (item) =>
     pedirConfirmacao({
@@ -1946,6 +1969,14 @@ export default function SolicitacoesApp() {
               Revisar
             </button>
           ))}
+        <button
+          onClick={() => subirAoTopo(item)}
+          title="Subir ao topo da lista"
+          aria-label="Subir solicitação ao topo"
+          className={`${pad} rounded-lg text-slate-500 hover:text-sky-600 hover:bg-sky-50 transition`}
+        >
+          <ArrowUpToLine className={ic} />
+        </button>
         {item.status !== 'PENDENTE' && (
           <button
             onClick={() => pedirReabrir(item)}
