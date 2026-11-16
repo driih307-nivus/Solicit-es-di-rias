@@ -216,6 +216,17 @@ const aguardandoCadastro = (i) => {
   return Boolean(i && i.status === 'PENDENTE' && h.length && h[h.length - 1].acao === 'aguardando_cadastro');
 };
 
+// Solicitações do mesmo cliente feitas hoje (evita mandar a mesma coisa várias vezes)
+const inicioDeHoje = () => { const d = new Date(); d.setHours(0, 0, 0, 0); return d.toISOString(); };
+const statusCurto = (i) => aguardandoCadastro(i) ? 'Aguardando cadastro' : i.status === 'SIM' ? 'Aprovada' : i.status === 'NAO' ? 'Recusada' : 'Pendente';
+const horaCurta = (v) => { try { return new Date(v).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }); } catch { return ''; } };
+const buscarMesmoDia = async (cod, ignorarId) => {
+  let q = supabase.from('solicitacoes').select('id, solicitante, tipo_solicitacao, status, historico, data_enviada').eq('cod_liberacao', cod).gte('data_enviada', inicioDeHoje()).order('data_enviada', { ascending: false });
+  const { data, error } = await q;
+  if (error) return [];
+  return (data || []).filter((i) => i.id !== ignorarId);
+};
+
 // topo da lista: o mais recente entre envio, reabertura e "subir ao topo"
 const ultimaMovimentacao = (i) => Math.max(...[i.topo_em, i.reaberta_em, i.data_enviada].map((v) => (v ? new Date(v).getTime() || 0 : 0)));
 
@@ -363,6 +374,7 @@ export default function SolicitacoesApp() {
   const [dataInicio, setDataInicio] = useState('');
   const [dataFim, setDataFim] = useState('');
   const [editandoId, setEditandoId] = useState(null);
+  const [mesmoDia, setMesmoDia] = useState([]);
   const [confirmacao, setConfirmacao] = useState(null);      // pop-up de confirmação
   const [selecionados, setSelecionados] = useState(() => new Set()); // ids marcados para excluir em lote
   const [excluindoLote, setExcluindoLote] = useState(false);
@@ -807,6 +819,15 @@ export default function SolicitacoesApp() {
     return () => { cancelado = true; };
   }, [modalAberto, form.cod_liberacao]);
 
+  // Avisa na hora se este cliente já tem solicitação hoje
+  useEffect(() => {
+    const cod = form.cod_liberacao;
+    if (!modalAberto || cod.length !== CODIGO_DIGITOS) { setMesmoDia([]); return; }
+    let cancelado = false;
+    buscarMesmoDia(cod, editandoId).then((l) => { if (!cancelado) setMesmoDia(l); });
+    return () => { cancelado = true; };
+  }, [modalAberto, form.cod_liberacao, editandoId]);
+
   const pedirConfirmacao = (cfg) => setConfirmacao(cfg);
 
   // Cadastra na tabela "clientes" um código que não estava na lista (para as próximas vezes já vir preenchido)
@@ -1179,7 +1200,7 @@ export default function SolicitacoesApp() {
   const podeAlterar = (item) => perfil === 'APROVADOR' || item.status === 'PENDENTE';
 
   // Valida o formulário e pede confirmação antes de enviar/salvar
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     if (comprimindo > 0) {
       toast.error('Aguarde terminar a compressão do vídeo.');
@@ -1213,14 +1234,19 @@ export default function SolicitacoesApp() {
 
     const qtdAnexos = anexosExistentes.length + novosArquivos.length;
     const clienteNovo = nomeStatus === 'nao_encontrado';
+    // confere de novo na hora de enviar (outro funcionário pode ter acabado de mandar)
+    const repetidas = editandoId ? [] : await buscarMesmoDia(cod, null);
+    const jaTem = repetidas.length > 0;
     pedirConfirmacao({
-      titulo: editandoId ? 'Salvar alterações?' : 'Enviar solicitação?',
+      titulo: editandoId ? 'Salvar alterações?' : jaTem ? 'Este cliente já tem solicitação hoje' : 'Enviar solicitação?',
       mensagem: editandoId
         ? 'Os dados atuais desta solicitação serão substituídos.'
+        : jaTem
+        ? `Já ${repetidas.length === 1 ? 'existe 1 solicitação' : `existem ${repetidas.length} solicitações`} hoje para o código ${cod}: ${repetidas.slice(0, 3).map((i) => `${horaCurta(i.data_enviada)} por ${i.solicitante || '—'} (${i.tipo_solicitacao}, ${statusCurto(i)})`).join('; ')}${repetidas.length > 3 ? '…' : ''}. Confira para não repetir.`
         : 'A solicitação será enviada ao aprovador.',
-      icone: editandoId ? <Pencil className="w-5 h-5" /> : <Send className="w-5 h-5" />,
-      tom: 'indigo',
-      textoConfirmar: editandoId ? 'Salvar' : 'Enviar',
+      icone: editandoId ? <Pencil className="w-5 h-5" /> : jaTem ? <AlertCircle className="w-5 h-5" /> : <Send className="w-5 h-5" />,
+      tom: jaTem ? 'amber' : 'indigo',
+      textoConfirmar: editandoId ? 'Salvar' : jaTem ? 'Enviar mesmo assim' : 'Enviar',
       detalhes: [
         ['Solicitante', solicitante],
         ['Cód. cliente', cod],
@@ -2828,6 +2854,21 @@ export default function SolicitacoesApp() {
                   <p className="fade-in text-[11px] text-amber-600 mt-1">
                     Faltam {CODIGO_DIGITOS - form.cod_liberacao.length} dígito(s).
                   </p>
+                )}
+                {mesmoDia.length > 0 && (
+                  <div role="alert" className="fade-in mt-2 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2">
+                    <p className="text-xs font-bold text-amber-800 flex items-center gap-1.5">
+                      <AlertCircle className="w-4 h-4 shrink-0" />
+                      Já {mesmoDia.length === 1 ? 'existe 1 solicitação' : `existem ${mesmoDia.length} solicitações`} hoje para este cliente
+                    </p>
+                    <ul className="mt-1 space-y-0.5">
+                      {mesmoDia.slice(0, 4).map((i) => (
+                        <li key={i.id} className="text-[11px] text-amber-900">
+                          <b>{horaCurta(i.data_enviada)}</b> · {i.solicitante || '—'} · {i.tipo_solicitacao} · <b>{statusCurto(i)}</b>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
                 )}
               </div>
 
