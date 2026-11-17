@@ -50,7 +50,8 @@ body {
 
 /* ===== Celular ===== */
 html { -webkit-text-size-adjust: 100%; }
-html, body { max-width: 100%; overflow-x: hidden; }
+/* clip (e não hidden): corta o que vazar para o lado sem virar uma área de rolagem própria — senão a busca flutuante (sticky) não fica presa no topo */
+html, body { max-width: 100%; overflow-x: hidden; overflow-x: clip; }
 body { -webkit-tap-highlight-color: transparent; }
 
 @media (max-width: 767px) {
