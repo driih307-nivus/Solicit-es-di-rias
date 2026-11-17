@@ -368,6 +368,22 @@ export default function SolicitacoesApp() {
 
   const ordemPersonalizada = ordemColunas.join() !== COLUNAS_PADRAO.join();
   const [busca, setBusca] = useState('');
+  const [atualizando, setAtualizando] = useState(false);
+
+  // Pílula da busca: ganha sombra quando a página rola e ela fica "flutuando" sobre os cards
+  useEffect(() => {
+    let pendente = false;
+    const ver = () => {
+      pendente = false;
+      const el = document.getElementById('busca-flutuante');
+      if (!el) return;
+      const topo = parseFloat(getComputedStyle(el).top) || 0;
+      document.documentElement.classList.toggle('busca-rolou', window.scrollY > 4 && el.getBoundingClientRect().top <= topo + 1);
+    };
+    const onScroll = () => { if (!pendente) { pendente = true; requestAnimationFrame(ver); } };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
   const [modalAberto, setModalAberto] = useState(false);
   const [modalAprovacao, setModalAprovacao] = useState(null);
   const [modalDetalhe, setModalDetalhe] = useState(null);       // visualização (solicitante)
@@ -2120,7 +2136,7 @@ export default function SolicitacoesApp() {
   );
 
   return (
-    <div className="min-h-screen bg-slate-100 p-3 sm:p-6 pb-24 overflow-x-hidden">
+    <div className="min-h-screen bg-slate-100 p-3 sm:p-6 pb-24 overflow-x-clip">
       <div className="max-w-[1800px] mx-auto space-y-4 sm:space-y-5">
         
         {/* CABEÇALHO */}
@@ -2190,6 +2206,47 @@ export default function SolicitacoesApp() {
               <Printer className="w-4 h-4" /> Imprimir / PDF
             </button>
           </div>
+        </div>
+
+        {/* BUSCA FLUTUANTE: pílula de vidro presa no topo, com o botão Atualizar ao lado */}
+        <div id="busca-flutuante" className="busca-flutuante">
+          <div className="relative flex-1 min-w-0">
+            <label htmlFor="busca-geral" className="sr-only">Buscar solicitações</label>
+            <Search className="w-4 h-4 absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+            <input
+              id="busca-geral"
+              type="search"
+              enterKeyHint="search"
+              autoComplete="off"
+              placeholder="Solicitante, cliente, cód., RCA, tipo..."
+              value={busca}
+              onChange={(e) => setBusca(e.target.value)}
+              className="busca-pilula w-full pl-11 pr-11 py-3 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+            {busca && (
+              <button
+                type="button"
+                onClick={() => setBusca('')}
+                aria-label="Limpar busca"
+                className="absolute right-2 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={async () => {
+              if (atualizando) return;
+              setAtualizando(true);
+              try { await fetchSolicitacoes(); } finally { setTimeout(() => setAtualizando(false), 400); }
+            }}
+            aria-label="Atualizar"
+            title="Atualizar"
+            className="btn-vidro"
+          >
+            <RefreshCw className={`w-5 h-5 ${atualizando ? 'animate-spin' : ''}`} />
+          </button>
         </div>
 
         {/* ESTATÍSTICAS RÁPIDAS (clique em um cartão para filtrar por status) */}
@@ -2278,30 +2335,9 @@ export default function SolicitacoesApp() {
           </button>
         )}
 
-        {/* BARRA DE FILTROS E BUSCA */}
+        {/* BARRA DE FILTROS */}
         <div className="fade-up bg-white p-4 rounded-xl border border-slate-200 shadow-sm space-y-3">
           <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
-            <div className="relative w-full md:w-96">
-              <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-              <input
-                type="text"
-                placeholder="Buscar por solicitante, cliente, cód., RCA, tipo..."
-                value={busca}
-                onChange={(e) => setBusca(e.target.value)}
-                className="w-full pl-9 pr-9 py-2 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              />
-              {busca && (
-                <button
-                  type="button"
-                  onClick={() => setBusca('')}
-                  aria-label="Limpar busca"
-                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-700"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              )}
-            </div>
-
             <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
               {['TODOS', 'PENDENTE', 'SIM', 'NAO'].map((st) => (
                 <button
