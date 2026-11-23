@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import { comprimirVideo } from '@/lib/comprimirVideo';
-import { listarRcasPortal, notificarRcaPortal, rcasEmCache, mesmoCodigo } from '@/lib/portal';
+import { listarRcasPortal, notificarRcaPortal, rcasEmCache, mesmoCodigo, listarFuncionariosPortal, funcionariosEmCache } from '@/lib/portal';
 import toast from 'react-hot-toast';
 import confetti from 'canvas-confetti';
 import {
@@ -131,7 +131,8 @@ const FUNCIONARIOS_PADRAO = [
   'Jacqueline Calheiro',
   'Fabrício Roderico',
   'Anne Silva',
-  'Jennifer Santos'
+  'Jennifer Santos',
+  'Rodrigo do Rosário'
 ];
 const CHAVE_SOLICITANTE = 'sl_solicitante';
 
@@ -597,17 +598,32 @@ export default function SolicitacoesApp() {
     }
   };
 
-  // Carrega os funcionários da tabela "funcionarios" (se não existir, fica a lista padrão)
+  // Funcionários = lista padrão + administradores do admin do portal + tabela "funcionarios"
   useEffect(() => {
+    let tabela = [];
+    let portal = funcionariosEmCache();
+    const juntar = () => {
+      const vistos = new Set();
+      const lista = [...FUNCIONARIOS_PADRAO, ...portal, ...tabela]
+        .map((n) => String(n || '').trim())
+        .filter((n) => {
+          const k = n.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+          if (!n || vistos.has(k)) return false;
+          vistos.add(k);
+          return true;
+        })
+        .sort((a, b) => a.localeCompare(b, 'pt-BR'));
+      setFuncionarios(lista);
+    };
+    juntar();
+    listarFuncionariosPortal().then((l) => { if (l) { portal = l; juntar(); } });
     supabase
       .from('funcionarios')
       .select('nome')
       .eq('ativo', true)
       .order('nome')
       .then(({ data, error }) => {
-        if (!error && data && data.length) {
-          setFuncionarios(data.map((f) => String(f.nome || '').trim()).filter(Boolean));
-        }
+        if (!error && data && data.length) { tabela = data.map((f) => f.nome); juntar(); }
       });
   }, []);
 
