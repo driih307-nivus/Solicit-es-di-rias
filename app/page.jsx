@@ -979,6 +979,50 @@ export default function SolicitacoesApp() {
     return () => window.removeEventListener('keydown', onKey);
   }, [modalAprovacao, modalDetalhe, preview, confirmacao, anexosAbertoId]);
 
+  // ===== Botão "Voltar" do celular fecha só a janela de cima =====
+  // Cada janela aberta ganha uma entrada no histórico do navegador; o Voltar
+  // fecha a de cima e mantém o resto como estava (sem sair do app).
+  const camadas = [
+    preview && (() => fecharPreview()),
+    confirmacao && (() => setConfirmacao(null)),
+    anexosAbertoId && (() => { setAnexosAbertoId(null); setUrlsAnexos({}); }),
+    modalAprovacao && (() => { setModalAprovacao(null); setMotivoRecusaInput(''); }),
+    modalDetalhe && (() => setModalDetalhe(null)),
+    modalAberto && (() => fecharModalForm())
+  ].filter(Boolean);
+  const camadasRef = useRef(camadas);
+  camadasRef.current = camadas;
+  const historicoRef = useRef(0);     // entradas que este app colocou no histórico
+  const ignorarPopRef = useRef(0);    // voltas feitas pelo próprio app (fechou pelo botão)
+
+  useEffect(() => {
+    const onPop = () => {
+      if (ignorarPopRef.current > 0) { ignorarPopRef.current--; return; }
+      if (historicoRef.current <= 0) return;
+      historicoRef.current--;
+      const fecharTopo = camadasRef.current[0];
+      if (fecharTopo) fecharTopo();
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+
+  const qtdCamadas = camadas.length;
+  useEffect(() => {
+    // abriu janela(s): uma entrada no histórico para cada
+    while (historicoRef.current < qtdCamadas) {
+      window.history.pushState({ slCamada: historicoRef.current + 1 }, '');
+      historicoRef.current++;
+    }
+    // fechou pelo botão da tela: tira do histórico as entradas que sobraram
+    const sobra = historicoRef.current - qtdCamadas;
+    if (sobra > 0) {
+      historicoRef.current = qtdCamadas;
+      ignorarPopRef.current++;
+      window.history.go(-sobra);
+    }
+  }, [qtdCamadas]);
+
   // ===== Gravação de áudio =====
   const pararTimer = () => {
     if (timerRef.current) {
