@@ -213,7 +213,7 @@ const fmtMinutos = (ms) => {
 // "Aguardando setor de cadastro": continua PENDENTE; a marca é a última entrada do histórico
 const MOTIVO_AGUARDANDO = 'Aguardando setor de cadastro';
 const aguardandoCadastro = (i) => {
-  const h = (i && i.historico) || [];
+  const h = ((i && i.historico) || []).filter((e) => e.acao !== 'conferido' && e.acao !== 'conferido_desfeito');
   return Boolean(i && i.status === 'PENDENTE' && h.length && h[h.length - 1].acao === 'aguardando_cadastro');
 };
 
@@ -258,15 +258,40 @@ function conferenciaPortal(obs) {
   return { ok: !div && !avisos.length, div, total: comps.length, avisos, just };
 }
 
-function AlertaConferencia({ obs, className = '' }) {
+// Conferência confirmada pela equipe: última marca 'conferido' / 'conferido_desfeito' no histórico
+function conferidoEquipe(item) {
+  const h = ((item && item.historico) || []).filter((e) => e.acao === 'conferido' || e.acao === 'conferido_desfeito');
+  const u = h[h.length - 1];
+  return u && u.acao === 'conferido' ? u : null;
+}
+
+function AlertaConferencia({ obs, className = '', item = null, onConferir = null }) {
   const c = conferenciaPortal(obs);
   if (!c) return null;
+  const conf = item ? conferidoEquipe(item) : null;
+  const dataHora = (iso) => { try { return new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch (e) { return ''; } };
+  const barra = onConferir && item ? (
+    conf ? (
+      <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg bg-emerald-600 text-white px-2.5 py-1.5">
+        <CheckCircle2 className="w-4 h-4 shrink-0" />
+        <span className="text-xs font-bold flex-1 min-w-0">Conferido pela equipe{conf.por ? ` · ${conf.por}` : ''} · {dataHora(conf.em)}</span>
+        <button type="button" onClick={() => onConferir(item, false)} className="text-[11px] font-semibold underline opacity-90 hover:opacity-100">Desfazer</button>
+      </div>
+    ) : (
+      <button type="button" onClick={() => onConferir(item, true)} className="mt-2 w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 transition">
+        <UserCheck className="w-4 h-4" /> Confirmar nossa conferência
+      </button>
+    )
+  ) : conf ? (
+    <p className="mt-1.5 text-[11px] font-bold text-emerald-700 flex items-center gap-1"><CheckCircle2 className="w-3.5 h-3.5" /> Conferido pela equipe{conf.por ? ` · ${conf.por}` : ''} · {dataHora(conf.em)}</p>
+  ) : null;
   if (c.ok) {
     return (
       <div className={`rounded-xl border border-emerald-300 bg-emerald-50 px-3 py-2 ${className}`}>
         <p className="text-xs font-bold text-emerald-800 flex items-center gap-1.5">
           <CheckCircle2 className="w-4 h-4 shrink-0" /> Conferência do portal OK: o comprovante bateu com o título.
         </p>
+        {barra}
       </div>
     );
   }
@@ -284,13 +309,22 @@ function AlertaConferencia({ obs, className = '' }) {
         </ul>
       )}
       {c.just && (<p className="mt-1.5 text-[11px] text-amber-900"><b>Justificativa do RCA:</b> {c.just}</p>)}
+      {barra}
     </div>
   );
 }
 
-function SeloDivergencia({ obs }) {
+function SeloDivergencia({ obs, item = null }) {
   const c = conferenciaPortal(obs);
-  if (!c || c.ok) return null;
+  if (!c) return null;
+  if (item && conferidoEquipe(item)) {
+    return (
+      <span title="Conferência confirmada pela equipe" className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-100 text-emerald-800 text-[10px] font-black whitespace-nowrap">
+        <CheckCircle2 className="w-3 h-3" /> Conferido
+      </span>
+    );
+  }
+  if (c.ok) return null;
   return (
     <span title="O comprovante não bateu 100% com a conferência do portal" className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-100 text-amber-800 text-[10px] font-black whitespace-nowrap">
       <AlertCircle className="w-3 h-3" /> Divergência
@@ -1603,6 +1637,27 @@ export default function SolicitacoesApp() {
     }
   };
 
+  // Confirmar (ou desfazer) a nossa conferência do comprovante enviado pelo portal; fica no histórico
+  const conferirComprovante = async (item, sim) => {
+    const em = new Date().toISOString();
+    const por = solicitanteSalvo() || (perfil === 'APROVADOR' ? 'Aprovador' : 'Solicitante');
+    const toastId = toast.loading(sim ? 'Registrando a conferência...' : 'Desfazendo...');
+    const { data, error } = await supabase
+      .from('solicitacoes')
+      .update({ historico: [...(item.historico || []), { acao: sim ? 'conferido' : 'conferido_desfeito', em, por, perfil }] })
+      .eq('id', item.id)
+      .select();
+    if (error || !data || !data.length) {
+      toast.error('Não foi possível registrar: ' + (error ? error.message : 'sem permissão de UPDATE'), { id: toastId, duration: 8000 });
+      return;
+    }
+    toast.success(sim ? 'Conferência confirmada.' : 'Conferência desfeita.', { id: toastId });
+    const novo = data[0];
+    setSolicitacoes((prev) => prev.map((i) => (i.id === novo.id ? novo : i)));
+    setModalAprovacao((m) => (m && m.id === novo.id ? novo : m));
+    setModalDetalhe((m) => (m && m.id === novo.id ? novo : m));
+  };
+
   // Subir ao topo: volta a solicitação para o começo da lista, sem mudar status nem data de envio
   const subirAoTopo = async (item) => {
     const em = new Date().toISOString();
@@ -2177,8 +2232,8 @@ export default function SolicitacoesApp() {
   const blocoHistorico = (item) => {
     const todas = item.historico || [];
     const ag = todas.filter((e) => e.acao === 'aguardando_cadastro');
-    const h = todas.filter((e) => e.acao !== 'aguardando_cadastro');
-    if (todas.length === 0) return null;
+    const h = todas.filter((e) => e.acao !== 'aguardando_cadastro' && e.acao !== 'conferido' && e.acao !== 'conferido_desfeito');
+    if (ag.length + h.length === 0) return null;
     return (
       <>
       {ag.length > 0 && (
@@ -2224,7 +2279,7 @@ export default function SolicitacoesApp() {
     cliente:     { titulo: 'Cliente',       largura: 10, td: 'font-medium text-slate-700 truncate', props: (i) => previaProps('Cliente', i.nome_cliente),
                    cel: (i) => i.nome_cliente || <span className="text-slate-300">-</span> },
     rca:         { titulo: 'RCA',           largura: 4,  td: 'font-medium text-slate-600 truncate', cel: (i) => i.rca },
-    tipo:        { titulo: 'Tipo',          largura: 13, td: '', cel: (i) => (<span className="inline-flex flex-wrap items-center gap-1">{pilulaTipo(i.tipo_solicitacao)}<SeloDivergencia obs={i.observacoes} /></span>) },
+    tipo:        { titulo: 'Tipo',          largura: 13, td: '', cel: (i) => (<span className="inline-flex flex-wrap items-center gap-1">{pilulaTipo(i.tipo_solicitacao)}<SeloDivergencia obs={i.observacoes} item={i} /></span>) },
     status:      { titulo: 'Status',        largura: 7,  centro: true, td: '', cel: (i) => badge(i) },
     observacoes: { titulo: 'Observações',   largura: 9,  td: 'truncate text-slate-600', props: (i) => previaProps('Observações', i.observacoes),
                    cel: (i) => i.observacoes || '-' },
@@ -2758,7 +2813,7 @@ export default function SolicitacoesApp() {
                     {badge(item)}
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-1.5">{pilulaTipo(item.tipo_solicitacao, 'text-xs')}<SeloDivergencia obs={item.observacoes} /></div>
+                  <div className="flex flex-wrap items-center gap-1.5">{pilulaTipo(item.tipo_solicitacao, 'text-xs')}<SeloDivergencia obs={item.observacoes} item={item} /></div>
 
                   {item.observacoes && (
                     <p className="text-xs text-slate-600 bg-slate-50 rounded-lg p-2.5 break-words">{item.observacoes}</p>
@@ -2949,7 +3004,7 @@ export default function SolicitacoesApp() {
               {editandoId ? 'Editar Solicitação' : 'Nova Solicitação'}
             </h2>
 
-            <AlertaConferencia obs={form.observacoes} className="mb-3" />
+            <AlertaConferencia obs={form.observacoes} className="mb-3" item={editandoId ? solicitacoes.find((i) => i.id === editandoId) || null : null} onConferir={conferirComprovante} />
             <form onSubmit={handleSubmit} className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-3">
               <div className="space-y-3 min-w-0">
               <div>
@@ -3294,7 +3349,7 @@ export default function SolicitacoesApp() {
             <p className="text-xs text-slate-500 mb-2">RCA: {modalAprovacao.rca}{modalAprovacao.solicitante ? ` · Solicitante: ${modalAprovacao.solicitante}` : ''}</p>
             <div className="mb-4">{pilulaTipo(modalAprovacao.tipo_solicitacao)}</div>
 
-            <AlertaConferencia obs={modalAprovacao.observacoes} className="mb-3" />
+            <AlertaConferencia obs={modalAprovacao.observacoes} className="mb-3" item={modalAprovacao} onConferir={conferirComprovante} />
             {modalAprovacao.observacoes && (
               <div className="bg-slate-50 p-3 rounded-lg text-xs text-slate-700 border border-slate-200 mb-4 whitespace-pre-wrap">
                 <strong>Obs. do Solicitante:</strong> {modalAprovacao.observacoes}
@@ -3389,7 +3444,7 @@ export default function SolicitacoesApp() {
             )}
             <p className="text-xs text-slate-500 mb-2">RCA: {modalDetalhe.rca}{modalDetalhe.solicitante ? ` · Solicitante: ${modalDetalhe.solicitante}` : ''}</p>
             <div className="mb-3 flex items-center gap-2 flex-wrap">{pilulaTipo(modalDetalhe.tipo_solicitacao)} {badge(modalDetalhe)}</div>
-            <AlertaConferencia obs={modalDetalhe.observacoes} className="mb-3" />
+            <AlertaConferencia obs={modalDetalhe.observacoes} className="mb-3" item={modalDetalhe} onConferir={conferirComprovante} />
             {modalDetalhe.observacoes && (
               <div className="bg-slate-50 p-3 rounded-lg text-xs text-slate-700 border border-slate-200 mb-3 whitespace-pre-wrap">
                 <strong>Observações:</strong> {modalDetalhe.observacoes}
