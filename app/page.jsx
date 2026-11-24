@@ -245,6 +245,59 @@ const TONS = {
   amber: { icone: 'bg-amber-50 text-amber-600', botao: 'bg-amber-600 hover:bg-amber-700' }
 };
 
+
+// Conferência feita pelo Portal do Representante (comprovantes): lê as observações que o portal grava
+function conferenciaPortal(obs) {
+  const txt = String(obs || '');
+  if (!/Enviado pelo Portal do Representante/.test(txt)) return null;
+  const linhas = txt.split('\n').map((l) => l.trim()).filter(Boolean);
+  const comps = linhas.filter((l) => /^Comprovante \d+:/.test(l));
+  const div = comps.filter((l) => /com divergência/.test(l)).length;
+  const avisos = linhas.filter((l) => l.startsWith('• ')).map((l) => l.slice(2));
+  const just = (linhas.find((l) => l.startsWith('Justificativa do RCA:')) || '').replace('Justificativa do RCA:', '').trim();
+  return { ok: !div && !avisos.length, div, total: comps.length, avisos, just };
+}
+
+function AlertaConferencia({ obs, className = '' }) {
+  const c = conferenciaPortal(obs);
+  if (!c) return null;
+  if (c.ok) {
+    return (
+      <div className={`rounded-xl border border-emerald-300 bg-emerald-50 px-3 py-2 ${className}`}>
+        <p className="text-xs font-bold text-emerald-800 flex items-center gap-1.5">
+          <CheckCircle2 className="w-4 h-4 shrink-0" /> Conferência do portal OK: o comprovante bateu com o título.
+        </p>
+      </div>
+    );
+  }
+  return (
+    <div role="alert" className={`rounded-xl border-2 border-amber-400 bg-amber-50 px-3 py-2.5 ${className}`}>
+      <p className="text-sm font-black text-amber-900 flex items-center gap-1.5">
+        <AlertCircle className="w-5 h-5 shrink-0 text-amber-600" /> Atenção: o comprovante não bateu 100% com a conferência
+      </p>
+      <p className="text-[11px] font-semibold text-amber-800 mt-0.5">
+        {c.div ? `${c.div} de ${c.total} comprovante${c.total > 1 ? 's' : ''} com divergência. ` : ''}Confira antes de liberar.
+      </p>
+      {c.avisos.length > 0 && (
+        <ul className="mt-1.5 space-y-0.5 list-disc pl-5">
+          {c.avisos.slice(0, 6).map((a, i) => (<li key={i} className="text-[11px] text-amber-900">{a}</li>))}
+        </ul>
+      )}
+      {c.just && (<p className="mt-1.5 text-[11px] text-amber-900"><b>Justificativa do RCA:</b> {c.just}</p>)}
+    </div>
+  );
+}
+
+function SeloDivergencia({ obs }) {
+  const c = conferenciaPortal(obs);
+  if (!c || c.ok) return null;
+  return (
+    <span title="O comprovante não bateu 100% com a conferência do portal" className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-100 text-amber-800 text-[10px] font-black whitespace-nowrap">
+      <AlertCircle className="w-3 h-3" /> Divergência
+    </span>
+  );
+}
+
 // Pop-up de confirmação com fade (entra e sai suavemente)
 function ConfirmarModal({ cfg, onClose }) {
   const [saindo, setSaindo] = useState(false);
@@ -2171,7 +2224,7 @@ export default function SolicitacoesApp() {
     cliente:     { titulo: 'Cliente',       largura: 10, td: 'font-medium text-slate-700 truncate', props: (i) => previaProps('Cliente', i.nome_cliente),
                    cel: (i) => i.nome_cliente || <span className="text-slate-300">-</span> },
     rca:         { titulo: 'RCA',           largura: 4,  td: 'font-medium text-slate-600 truncate', cel: (i) => i.rca },
-    tipo:        { titulo: 'Tipo',          largura: 13, td: '', cel: (i) => pilulaTipo(i.tipo_solicitacao) },
+    tipo:        { titulo: 'Tipo',          largura: 13, td: '', cel: (i) => (<span className="inline-flex flex-wrap items-center gap-1">{pilulaTipo(i.tipo_solicitacao)}<SeloDivergencia obs={i.observacoes} /></span>) },
     status:      { titulo: 'Status',        largura: 7,  centro: true, td: '', cel: (i) => badge(i) },
     observacoes: { titulo: 'Observações',   largura: 9,  td: 'truncate text-slate-600', props: (i) => previaProps('Observações', i.observacoes),
                    cel: (i) => i.observacoes || '-' },
@@ -2705,7 +2758,7 @@ export default function SolicitacoesApp() {
                     {badge(item)}
                   </div>
 
-                  <div>{pilulaTipo(item.tipo_solicitacao, 'text-xs')}</div>
+                  <div className="flex flex-wrap items-center gap-1.5">{pilulaTipo(item.tipo_solicitacao, 'text-xs')}<SeloDivergencia obs={item.observacoes} /></div>
 
                   {item.observacoes && (
                     <p className="text-xs text-slate-600 bg-slate-50 rounded-lg p-2.5 break-words">{item.observacoes}</p>
@@ -2890,13 +2943,15 @@ export default function SolicitacoesApp() {
       {/* MODAL: NOVA SOLICITAÇÃO / EDITAR SOLICITAÇÃO */}
       {modalAberto && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4 z-50 fade-in">
-          <div className="bg-white rounded-t-2xl sm:rounded-2xl max-w-md w-full p-5 sm:p-6 shadow-xl border border-slate-200 max-h-[92vh] overflow-y-auto sheet-in pb-[calc(1.25rem+env(safe-area-inset-bottom))]">
-            <h2 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+          <div className="bg-white rounded-t-2xl sm:rounded-2xl max-w-md sm:max-w-4xl w-full p-5 sm:p-6 shadow-xl border border-slate-200 max-h-[94vh] overflow-y-auto sheet-in pb-[calc(1.25rem+env(safe-area-inset-bottom))]">
+            <h2 className="text-lg font-bold text-slate-800 mb-3 flex items-center gap-2">
               {editandoId ? <Pencil className="w-5 h-5 text-indigo-600" /> : <Plus className="w-5 h-5 text-indigo-600" />}
               {editandoId ? 'Editar Solicitação' : 'Nova Solicitação'}
             </h2>
 
-            <form onSubmit={handleSubmit} className="space-y-4">
+            <AlertaConferencia obs={form.observacoes} className="mb-3" />
+            <form onSubmit={handleSubmit} className="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-3">
+              <div className="space-y-3 min-w-0">
               <div>
                 <label htmlFor="solicitante" className="block text-xs font-semibold text-slate-600 mb-1">Funcionário solicitante *</label>
                 <select
@@ -3085,14 +3140,17 @@ export default function SolicitacoesApp() {
                 </select>
               </div>
 
-              <div>
+              </div>
+
+              <div className="space-y-3 min-w-0 flex flex-col">
+              <div className="flex-1 flex flex-col">
                 <label className="block text-xs font-semibold text-slate-600 mb-1">Observações</label>
                 <textarea
-                  rows={3}
+                  rows={9}
                   placeholder="Informe detalhes da liberação ou instrução do RCA..."
                   value={form.observacoes}
                   onChange={(e) => setForm({ ...form, observacoes: e.target.value })}
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                  className="w-full flex-1 min-h-[7rem] border border-slate-300 rounded-lg px-3 py-2 text-xs sm:text-sm leading-relaxed whitespace-pre-wrap focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                 />
               </div>
 
@@ -3198,7 +3256,9 @@ export default function SolicitacoesApp() {
                 )}
               </div>
 
-              <div className="flex justify-end gap-2 pt-2">
+              </div>
+
+              <div className="sm:col-span-2 flex justify-end gap-2 pt-1">
                 <button
                   type="button"
                   onClick={fecharModalForm}
@@ -3234,8 +3294,9 @@ export default function SolicitacoesApp() {
             <p className="text-xs text-slate-500 mb-2">RCA: {modalAprovacao.rca}{modalAprovacao.solicitante ? ` · Solicitante: ${modalAprovacao.solicitante}` : ''}</p>
             <div className="mb-4">{pilulaTipo(modalAprovacao.tipo_solicitacao)}</div>
 
+            <AlertaConferencia obs={modalAprovacao.observacoes} className="mb-3" />
             {modalAprovacao.observacoes && (
-              <div className="bg-slate-50 p-3 rounded-lg text-xs text-slate-700 border border-slate-200 mb-4">
+              <div className="bg-slate-50 p-3 rounded-lg text-xs text-slate-700 border border-slate-200 mb-4 whitespace-pre-wrap">
                 <strong>Obs. do Solicitante:</strong> {modalAprovacao.observacoes}
               </div>
             )}
@@ -3328,8 +3389,9 @@ export default function SolicitacoesApp() {
             )}
             <p className="text-xs text-slate-500 mb-2">RCA: {modalDetalhe.rca}{modalDetalhe.solicitante ? ` · Solicitante: ${modalDetalhe.solicitante}` : ''}</p>
             <div className="mb-3 flex items-center gap-2 flex-wrap">{pilulaTipo(modalDetalhe.tipo_solicitacao)} {badge(modalDetalhe)}</div>
+            <AlertaConferencia obs={modalDetalhe.observacoes} className="mb-3" />
             {modalDetalhe.observacoes && (
-              <div className="bg-slate-50 p-3 rounded-lg text-xs text-slate-700 border border-slate-200 mb-3">
+              <div className="bg-slate-50 p-3 rounded-lg text-xs text-slate-700 border border-slate-200 mb-3 whitespace-pre-wrap">
                 <strong>Observações:</strong> {modalDetalhe.observacoes}
               </div>
             )}
