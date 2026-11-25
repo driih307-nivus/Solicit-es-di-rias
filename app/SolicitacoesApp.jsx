@@ -505,6 +505,7 @@ export default function SolicitacoesApp() {
   const descartarRef = useRef(false);
 
   const [form, setForm] = useState(formVazio());
+  const formInicialRef = useRef(null); // como o formulário estava ao abrir (Esc só fecha se nada mudou)
 
   const [motivoRecusaInput, setMotivoRecusaInput] = useState('');
 
@@ -986,7 +987,9 @@ export default function SolicitacoesApp() {
     setEditandoId(null);
     nomeAutoRef.current = false;
     setNomeStatus('idle');
-    setForm(formVazio());
+    const inicial = formVazio();
+    formInicialRef.current = inicial;
+    setForm(inicial);
     limparAnexosForm();
     setModalAberto(true);
   };
@@ -996,14 +999,16 @@ export default function SolicitacoesApp() {
     setEditandoId(item.id);
     nomeAutoRef.current = false;
     setNomeStatus('idle');
-    setForm({
+    const inicial = {
       solicitante: item.solicitante || '',
       cod_liberacao: item.cod_liberacao || '',
       nome_cliente: item.nome_cliente || '',
       rca: item.rca || '',
       tipo_solicitacao: item.tipo_solicitacao || TIPOS_SOLICITACAO[0],
       observacoes: item.observacoes || ''
-    });
+    };
+    formInicialRef.current = inicial;
+    setForm(inicial);
     setAnexosExistentes(item.anexos || []);
     setAnexosRemovidos([]);
     setNovosArquivos([]);
@@ -1081,6 +1086,25 @@ export default function SolicitacoesApp() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [modalAprovacao, modalDetalhe, preview, confirmacao, anexosAbertoId]);
+
+  // Esc fecha o formulário (nova/editar) se nada foi alterado; com alterações, fica aberto
+  useEffect(() => {
+    if (!modalAberto) return;
+    const onKey = (e) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      if (preview || confirmacao || anexosAbertoId) return; // essas janelas tratam o próprio Esc
+      if (enviando || gravando) return;
+      const ini = formInicialRef.current || {};
+      const mudouCampo = Object.keys(form).some((k) => String(form[k] ?? '').trim() !== String(ini[k] ?? '').trim());
+      if (mudouCampo || novosArquivos.length || anexosRemovidos.length) {
+        toast('Há alterações não salvas. Salve ou use o botão Cancelar.', { id: 'esc-form' });
+        return;
+      }
+      fecharModalForm();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [modalAberto, form, novosArquivos, anexosRemovidos, preview, confirmacao, anexosAbertoId, enviando, gravando]);
 
   // ===== Botão "Voltar" do celular fecha só a janela de cima =====
   // Cada janela aberta ganha uma entrada no histórico do navegador; o Voltar
