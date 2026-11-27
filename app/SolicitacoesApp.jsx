@@ -152,6 +152,19 @@ const solicitanteSalvo = () => {
   }
 };
 
+// Quem está aprovando (perfil aprovador): escolhido uma vez e lembrado neste navegador
+const APROVADORES = ['Silvana', 'Lucas', 'Felipe', 'Marta'];
+const CHAVE_APROVADOR = 'sl_aprovador';
+const aprovadorSalvo = () => { try { return localStorage.getItem(CHAVE_APROVADOR) || ''; } catch (e) { return ''; } };
+const lembrarAprovador = (nome) => { try { if (nome) localStorage.setItem(CHAVE_APROVADOR, nome); else localStorage.removeItem(CHAVE_APROVADOR); } catch (e) {} };
+// última resposta registrada (SIM/NÃO) e quem respondeu
+const respondidaPor = (item) => {
+  const h = ((item && item.historico) || []).filter((e) => e.acao === 'respondida');
+  const u = h[h.length - 1];
+  return u && u.status === item.status ? u : null;
+};
+const ACOES_INTERNAS = ['conferido', 'conferido_desfeito', 'respondida', 'topo'];
+
 const lembrarSolicitante = (nome) => {
   try {
     if (nome) localStorage.setItem(CHAVE_SOLICITANTE, nome);
@@ -213,7 +226,7 @@ const fmtMinutos = (ms) => {
 // "Aguardando setor de cadastro": continua PENDENTE; a marca é a última entrada do histórico
 const MOTIVO_AGUARDANDO = 'Aguardando setor de cadastro';
 const aguardandoCadastro = (i) => {
-  const h = ((i && i.historico) || []).filter((e) => e.acao !== 'conferido' && e.acao !== 'conferido_desfeito');
+  const h = ((i && i.historico) || []).filter((e) => !ACOES_INTERNAS.includes(e.acao));
   return Boolean(i && i.status === 'PENDENTE' && h.length && h[h.length - 1].acao === 'aguardando_cadastro');
 };
 
@@ -1541,6 +1554,11 @@ export default function SolicitacoesApp() {
   // Processar Aprovação/Recusa
   const handleAprovarRecusar = (statusAprovado) => {
     if (!modalAprovacao) return;
+    if (!aprovador) {
+      toast.error('Escolha quem está aprovando antes de responder.');
+      document.getElementById('escolha-aprovador')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
 
     if (!statusAprovado && !motivoRecusaInput.trim()) {
       toast.error('Informe o motivo da recusa!');
@@ -1560,6 +1578,7 @@ export default function SolicitacoesApp() {
         ['Cód. cliente', modalAprovacao.cod_liberacao],
         ['Cliente', modalAprovacao.nome_cliente],
         ['RCA', modalAprovacao.rca],
+        ['Aprovador', aprovador],
         ...(statusAprovado ? [] : [['Motivo', motivoRecusaInput.trim()]])
       ],
       onConfirm: () => executarAprovacao(statusAprovado)
@@ -1573,7 +1592,8 @@ export default function SolicitacoesApp() {
       .update({
         status: statusAprovado ? 'SIM' : 'NAO',
         motivo_recusa: statusAprovado ? '' : motivoRecusaInput,
-        data_finalizada: new Date().toISOString()
+        data_finalizada: new Date().toISOString(),
+        historico: [...(modalAprovacao.historico || []), { acao: 'respondida', em: new Date().toISOString(), por: aprovador, status: statusAprovado ? 'SIM' : 'NAO' }]
       })
       .eq('id', modalAprovacao.id);
 
@@ -1602,6 +1622,11 @@ export default function SolicitacoesApp() {
   // Aguardando setor de cadastro: fica PENDENTE na lista, com a marca e o registro no histórico
   const pedirAguardandoCadastro = () => {
     if (!modalAprovacao) return;
+    if (!aprovador) {
+      toast.error('Escolha quem está aprovando antes de responder.');
+      document.getElementById('escolha-aprovador')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
     pedirConfirmacao({
       titulo: 'Aguardando setor de cadastro?',
       mensagem: 'A solicitação continua pendente na lista, marcada como aguardando o setor de cadastro.',
@@ -1619,7 +1644,7 @@ export default function SolicitacoesApp() {
 
   const executarAguardandoCadastro = async (item) => {
     const toastId = toast.loading('Marcando...');
-    const entrada = { acao: 'aguardando_cadastro', em: new Date().toISOString(), por: perfil, observacao: motivoRecusaInput.trim() };
+    const entrada = { acao: 'aguardando_cadastro', em: new Date().toISOString(), por: perfil, quem: aprovador, observacao: motivoRecusaInput.trim() };
     const { data, error } = await supabase
       .from('solicitacoes')
       .update({ status: 'PENDENTE', data_finalizada: null, historico: [...(item.historico || []), entrada] })
@@ -1638,9 +1663,13 @@ export default function SolicitacoesApp() {
   };
 
   // Confirmar (ou desfazer) a nossa conferência do comprovante enviado pelo portal; fica no histórico
+  const [aprovador, setAprovador] = useState('');
+  useEffect(() => { setAprovador(aprovadorSalvo()); }, []);
+  const escolherAprovador = (nome) => { setAprovador(nome); lembrarAprovador(nome); };
+
   const conferirComprovante = async (item, sim) => {
     const em = new Date().toISOString();
-    const por = solicitanteSalvo() || (perfil === 'APROVADOR' ? 'Aprovador' : 'Solicitante');
+    const por = (perfil === 'APROVADOR' ? aprovador : solicitanteSalvo()) || solicitanteSalvo() || (perfil === 'APROVADOR' ? 'Aprovador' : 'Solicitante');
     const toastId = toast.loading(sim ? 'Registrando a conferência...' : 'Desfazendo...');
     const { data, error } = await supabase
       .from('solicitacoes')
@@ -2137,9 +2166,11 @@ export default function SolicitacoesApp() {
       </span>
       {aguardandoCadastro(item) ? (
         <span className="text-[10px] font-semibold text-sky-700 whitespace-nowrap">⏳ Aguard. cadastro</span>
-      ) : item.status === 'PENDENTE' && item.reaberta_em && (
+      ) : item.status === 'PENDENTE' && item.reaberta_em ? (
         <span className="text-[10px] font-semibold text-amber-700 whitespace-nowrap">🔄 Reaberta</span>
-      )}
+      ) : respondidaPor(item) ? (
+        <span className="text-[10px] font-semibold text-slate-500 whitespace-nowrap" title={`Respondida por ${respondidaPor(item).por} em ${formatDateTime(respondidaPor(item).em)}`}>por {respondidaPor(item).por}</span>
+      ) : null}
     </span>
   );
 
@@ -2232,7 +2263,7 @@ export default function SolicitacoesApp() {
   const blocoHistorico = (item) => {
     const todas = item.historico || [];
     const ag = todas.filter((e) => e.acao === 'aguardando_cadastro');
-    const h = todas.filter((e) => e.acao !== 'aguardando_cadastro' && e.acao !== 'conferido' && e.acao !== 'conferido_desfeito');
+    const h = todas.filter((e) => e.acao !== 'aguardando_cadastro' && !ACOES_INTERNAS.includes(e.acao));
     if (ag.length + h.length === 0) return null;
     return (
       <>
@@ -2241,7 +2272,7 @@ export default function SolicitacoesApp() {
           <p className="font-semibold mb-1.5 flex items-center gap-1.5"><Clock className="w-3.5 h-3.5" /> {MOTIVO_AGUARDANDO}</p>
           <ul className="space-y-1">
             {[...ag].reverse().map((e, i) => (
-              <li key={i} className="break-words">Marcado em {formatDateTime(e.em)}{e.observacao ? ` — ${e.observacao}` : ''}</li>
+              <li key={i} className="break-words">Marcado em {formatDateTime(e.em)}{e.quem ? ` por ${e.quem}` : ''}{e.observacao ? ` — ${e.observacao}` : ''}</li>
             ))}
           </ul>
         </div>
@@ -3369,6 +3400,23 @@ export default function SolicitacoesApp() {
             {blocoHistorico(modalAprovacao)}
 
             <div className="space-y-3">
+              <div id="escolha-aprovador" className={`rounded-xl border p-3 ${aprovador ? 'border-slate-200 bg-slate-50' : 'border-amber-300 bg-amber-50'}`}>
+                <p className="text-xs font-semibold text-slate-600 mb-2">Quem está aprovando? *</p>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {APROVADORES.map((n) => (
+                    <button
+                      key={n}
+                      type="button"
+                      onClick={() => escolherAprovador(n)}
+                      aria-pressed={aprovador === n}
+                      className={`px-3 py-2 rounded-lg text-sm font-semibold border transition ${aprovador === n ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm' : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'}`}
+                    >
+                      {aprovador === n && <CheckCircle2 className="w-3.5 h-3.5 inline mr-1 -mt-0.5" />}{n}
+                    </button>
+                  ))}
+                </div>
+                {!aprovador && <p className="text-[11px] text-amber-700 mt-2">Escolha uma vez: fica gravado neste navegador.</p>}
+              </div>
               <div>
                 <label className="block text-xs font-semibold text-slate-600 mb-1">Motivo da Recusa (Obrigatório se Negar)</label>
                 <textarea
@@ -3460,6 +3508,9 @@ export default function SolicitacoesApp() {
               <p>Enviada: {formatDateTime(modalDetalhe.data_enviada)}</p>
               {modalDetalhe.data_finalizada && (
                 <p>Finalizada: {formatDateTime(modalDetalhe.data_finalizada)} · Tempo {calcularTempoConclusao(modalDetalhe.data_enviada, modalDetalhe.data_finalizada)}</p>
+              )}
+              {respondidaPor(modalDetalhe) && (
+                <p>{modalDetalhe.status === 'SIM' ? 'Aprovada' : 'Recusada'} por <b className="text-slate-700">{respondidaPor(modalDetalhe).por}</b></p>
               )}
             </div>
             {(modalDetalhe.anexos || []).length > 0 && (
